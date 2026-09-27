@@ -1,5 +1,7 @@
 // Telegram-бот «Разбор по дате рождения».
 
+import https from 'node:https';
+import dns from 'node:dns';
 import { Bot, InlineKeyboard, GrammyError } from 'grammy';
 import {
   BOT_TOKEN, ADMIN_IDS, TIMEZONE, DAILY_HOUR, FREE_PAUSE_MS, PAID_PAUSE_MS,
@@ -16,7 +18,12 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-const bot = new Bot(BOT_TOKEN);
+// IPv4 в приоритете: на части домашних сетей IPv6 «есть», но не работает,
+// и запросы к Telegram молча зависают
+dns.setDefaultResultOrder('ipv4first');
+const bot = new Bot(BOT_TOKEN, {
+  client: { baseFetchConfig: { agent: new https.Agent({ keepAlive: true, family: 4 }) } },
+});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 const HTML = { parse_mode: 'HTML' };
@@ -571,7 +578,27 @@ async function dailyTick() {
 bot.catch((err) => console.error('Ошибка обработки апдейта', err.error));
 
 async function main() {
-  await bot.init();
+  console.log('Подключаюсь к Telegram…');
+  const hint = setTimeout(() => {
+    console.log(
+      '\n⏳ Telegram не отвечает уже 15 секунд.\n' +
+        'Проверьте в браузере: https://api.telegram.org/bot<ВАШ_ТОКЕН>/getMe\n' +
+        '— не открывается: api.telegram.org недоступен из вашей сети (нужен VPN или сервер);\n' +
+        '— открывается: напишите, что показывает это окно дальше.\n',
+    );
+  }, 15000);
+  try {
+    await bot.init();
+  } catch (e) {
+    clearTimeout(hint);
+    if (e instanceof GrammyError && e.error_code === 401) {
+      console.error('❌ Неверный BOT_TOKEN в .env — скопируйте токен из @BotFather заново.');
+    } else {
+      console.error('❌ Не удалось подключиться к Telegram:', e.message);
+    }
+    process.exit(1);
+  }
+  clearTimeout(hint);
 
   if (cp.cryptoEnabled()) {
     try {
