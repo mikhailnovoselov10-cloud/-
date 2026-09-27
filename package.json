@@ -1,0 +1,16 @@
+{
+  "name": "numerology-bot",
+  "version": "1.0.0",
+  "description": "Telegram-бот «Разбор по дате рождения» (нумерология) с оплатой Telegram Stars и CryptoBot",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning main.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "grammy": "^1.46.0"
+  }
+}
