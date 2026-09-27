@@ -2,6 +2,7 @@
 
 import https from 'node:https';
 import { SocksProxyAgent } from 'socks-proxy-agent';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 try {
   process.loadEnvFile();
@@ -32,19 +33,25 @@ export const ADMIN_IDS = (env.ADMIN_IDS || '')
 
 export const DB_PATH = env.DB_PATH || './bot.sqlite';
 
-// SOCKS5-прокси для запросов к Telegram и CryptoBot (если провайдер их блокирует).
-// Форматы: ip:порт:логин:пароль | ip:порт | логин:пароль@ip:порт | socks5://логин:пароль@ip:порт
+// Прокси для запросов к Telegram и CryptoBot (если провайдер их блокирует).
+// Тип задаётся приставкой: socks5:// (по умолчанию) или http://
+// Форматы: [тип://]ip:порт:логин:пароль | [тип://]ip:порт | [тип://]логин:пароль@ip:порт
 function proxyUrl(raw) {
   raw = (raw || '').trim();
   if (!raw) return '';
-  if (/^socks[45]?h?:\/\//i.test(raw)) return raw;
+  let scheme = 'socks5';
+  const sm = raw.match(/^(socks[45]?h?|https?):\/\//i);
+  if (sm) {
+    scheme = sm[1].toLowerCase();
+    raw = raw.slice(sm[0].length);
+  }
   // ip:порт или ip:порт:логин:пароль (в пароле могут быть любые символы)
   const m = raw.match(/^([\w.-]+):(\d+)(?::([^:]+):(.+))?$/);
   if (m) {
     const auth = m[3] ? `${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@` : '';
-    return `socks5://${auth}${m[1]}:${m[2]}`;
+    return `${scheme}://${auth}${m[1]}:${m[2]}`;
   }
-  if (raw.includes('@')) return `socks5://${raw}`;
+  if (raw.includes('@')) return `${scheme}://${raw}`;
   throw new Error('PROXY_URL: непонятный формат, ожидается ip:порт:логин:пароль');
 }
 export const PROXY_URL = proxyUrl(env.PROXY_URL);
@@ -53,9 +60,12 @@ export const PROXY_LABEL = PROXY_URL ? PROXY_URL.replace(/\/\/[^@]*@/, '//') : '
 
 // Общий сетевой агент: через прокси, либо напрямую по IPv4
 // (на части домашних сетей IPv6 «есть», но не работает, и запросы молча зависают)
-export const httpsAgent = PROXY_URL
-  ? new SocksProxyAgent(PROXY_URL, { keepAlive: true, timeout: 20000 })
-  : new https.Agent({ keepAlive: true, family: 4 });
+function makeAgent() {
+  if (!PROXY_URL) return new https.Agent({ keepAlive: true, family: 4 });
+  if (/^https?:/.test(PROXY_URL)) return new HttpsProxyAgent(PROXY_URL, { keepAlive: true });
+  return new SocksProxyAgent(PROXY_URL, { keepAlive: true, timeout: 20000 });
+}
+export const httpsAgent = makeAgent();
 
 // Часовой пояс для «сегодня», личного года и утренней рассылки
 export const TIMEZONE = env.TIMEZONE || 'Europe/Moscow';
