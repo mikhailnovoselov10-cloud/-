@@ -1,24 +1,44 @@
 // Crypto Pay API (@CryptoBot): https://help.crypt.bot/crypto-pay-api
 
+import https from 'node:https';
 import {
-  CRYPTOPAY_TOKEN, CRYPTOPAY_TESTNET, CRYPTOPAY_ASSETS, CRYPTOPAY_INVOICE_TTL,
+  CRYPTOPAY_TOKEN, CRYPTOPAY_TESTNET, CRYPTOPAY_ASSETS, CRYPTOPAY_INVOICE_TTL, httpsAgent,
 } from './config.js';
 
 const BASE = CRYPTOPAY_TESTNET ? 'https://testnet-pay.crypt.bot/api' : 'https://pay.crypt.bot/api';
 
 export const cryptoEnabled = () => !!CRYPTOPAY_TOKEN;
 
-async function call(method, params = {}) {
-  const res = await fetch(`${BASE}/${method}`, {
-    method: 'POST',
-    headers: {
-      'Crypto-Pay-API-Token': CRYPTOPAY_TOKEN,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(params),
-    signal: AbortSignal.timeout(15000),
+// POST через общий агент (он же ходит через прокси, если задан PROXY_URL)
+function post(url, body) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, {
+      method: 'POST',
+      agent: httpsAgent,
+      timeout: 15000,
+      headers: {
+        'Crypto-Pay-API-Token': CRYPTOPAY_TOKEN,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode, text }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end(body);
   });
-  const data = await res.json().catch(() => ({}));
+}
+
+async function call(method, params = {}) {
+  const res = await post(`${BASE}/${method}`, JSON.stringify(params));
+  let data = {};
+  try {
+    data = JSON.parse(res.text);
+  } catch {}
   if (!data.ok) {
     throw new Error(`CryptoPay ${method}: ${JSON.stringify(data.error ?? res.status)}`);
   }

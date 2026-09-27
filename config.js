@@ -1,5 +1,8 @@
 // Настройки бота: токены берутся из окружения (.env), цены и продукты — здесь.
 
+import https from 'node:https';
+import { SocksProxyAgent } from 'socks-proxy-agent';
+
 try {
   process.loadEnvFile();
 } catch {
@@ -28,6 +31,31 @@ export const ADMIN_IDS = (env.ADMIN_IDS || '')
   .filter(Boolean);
 
 export const DB_PATH = env.DB_PATH || './bot.sqlite';
+
+// SOCKS5-прокси для запросов к Telegram и CryptoBot (если провайдер их блокирует).
+// Форматы: ip:порт:логин:пароль | ip:порт | логин:пароль@ip:порт | socks5://логин:пароль@ip:порт
+function proxyUrl(raw) {
+  raw = (raw || '').trim();
+  if (!raw) return '';
+  if (/^socks[45]?h?:\/\//i.test(raw)) return raw;
+  // ip:порт или ip:порт:логин:пароль (в пароле могут быть любые символы)
+  const m = raw.match(/^([\w.-]+):(\d+)(?::([^:]+):(.+))?$/);
+  if (m) {
+    const auth = m[3] ? `${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@` : '';
+    return `socks5://${auth}${m[1]}:${m[2]}`;
+  }
+  if (raw.includes('@')) return `socks5://${raw}`;
+  throw new Error('PROXY_URL: непонятный формат, ожидается ip:порт:логин:пароль');
+}
+export const PROXY_URL = proxyUrl(env.PROXY_URL);
+// Для логов — без логина и пароля
+export const PROXY_LABEL = PROXY_URL ? PROXY_URL.replace(/\/\/[^@]*@/, '//') : '';
+
+// Общий сетевой агент: через прокси, либо напрямую по IPv4
+// (на части домашних сетей IPv6 «есть», но не работает, и запросы молча зависают)
+export const httpsAgent = PROXY_URL
+  ? new SocksProxyAgent(PROXY_URL, { keepAlive: true, timeout: 20000 })
+  : new https.Agent({ keepAlive: true, family: 4 });
 
 // Часовой пояс для «сегодня», личного года и утренней рассылки
 export const TIMEZONE = env.TIMEZONE || 'Europe/Moscow';

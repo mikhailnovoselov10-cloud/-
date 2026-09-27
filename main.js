@@ -1,11 +1,11 @@
 // Telegram-бот «Разбор по дате рождения».
 
-import https from 'node:https';
 import dns from 'node:dns';
 import { Bot, InlineKeyboard, GrammyError } from 'grammy';
 import {
   BOT_TOKEN, ADMIN_IDS, TIMEZONE, DAILY_HOUR, FREE_PAUSE_MS, PAID_PAUSE_MS,
   SUPPORT_CONTACT, SPHERES, SPHERE_KEYS, PRODUCTS, CRYPTOPAY_POLL_MS, CRYPTOPAY_TESTNET,
+  httpsAgent, PROXY_LABEL,
 } from './config.js';
 import * as db from './db.js';
 import * as cp from './cryptopay.js';
@@ -18,12 +18,8 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-// IPv4 в приоритете: на части домашних сетей IPv6 «есть», но не работает,
-// и запросы к Telegram молча зависают
 dns.setDefaultResultOrder('ipv4first');
-const bot = new Bot(BOT_TOKEN, {
-  client: { baseFetchConfig: { agent: new https.Agent({ keepAlive: true, family: 4 }) } },
-});
+const bot = new Bot(BOT_TOKEN, { client: { baseFetchConfig: { agent: httpsAgent } } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 const HTML = { parse_mode: 'HTML' };
@@ -578,12 +574,13 @@ async function dailyTick() {
 bot.catch((err) => console.error('Ошибка обработки апдейта', err.error));
 
 async function main() {
-  console.log('Подключаюсь к Telegram…');
+  console.log(PROXY_LABEL ? `Подключаюсь к Telegram через прокси ${PROXY_LABEL}…` : 'Подключаюсь к Telegram…');
   const hint = setTimeout(() => {
     console.log(
       '\n⏳ Telegram не отвечает уже 15 секунд.\n' +
         'Проверьте в браузере: https://api.telegram.org/bot<ВАШ_ТОКЕН>/getMe\n' +
-        '— не открывается: api.telegram.org недоступен из вашей сети (нужен VPN или сервер);\n' +
+        '— не открывается: api.telegram.org недоступен из вашей сети — укажите PROXY_URL в .env;\n' +
+        '— уже указан PROXY_URL: проверьте, что прокси рабочий и это SOCKS5;\n' +
         '— открывается: напишите, что показывает это окно дальше.\n',
     );
   }, 15000);
