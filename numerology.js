@@ -82,5 +82,26 @@ export function strongestDigit(counts) {
   return best;
 }
 
+// Матрица судьбы: сворачивание до аркана 1–22
+export function reduce22(n) {
+  while (n > 22) n = digitSum(n);
+  return n === 0 ? 22 : n;
+}
+
+// Коды игры «9 уровней» (арканы 1–22) по дате рождения
+export function matrixCodes({ d, m, y }) {
+  const a = reduce22(d); // личность / потенциал
+  const b = m; // месяц
+  const c = reduce22(digitSum(y)); // год
+  const dd = reduce22(a + b + c); // кармическая точка
+  return {
+    potential: a,
+    shadow: reduce22(c + dd),
+    mom: reduce22(a + b),
+    dad: reduce22(b + c),
+    archetype: reduce22(a + b + c + dd), // центр матрицы
+  };
+}
+
 // Число совместимости пары (1–9)
 export const compatNumber = (lp1, lp2) => reduce(base(lp1) + base(lp2));

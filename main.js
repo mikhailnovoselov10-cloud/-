@@ -12,6 +12,7 @@ import * as cp from './cryptopay.js';
 import { parseDate, toIso, fromIso, formatDate, lifePath } from './numerology.js';
 import { sphereReading, yearReading, compatReading, dailyForecast } from './reading.js';
 import { NUMBERS, UI } from './texts.js';
+import { setupGame, afterBirth, sendIntro } from './game.js';
 
 if (!BOT_TOKEN) {
   console.error('Не задан BOT_TOKEN (см. .env.example)');
@@ -363,12 +364,8 @@ async function cryptoPollTick() {
 
 // ---------- команды ----------
 
-bot.command('start', async (ctx) => {
-  const user = db.getUser(ctx.from.id);
-  await ctx.reply(UI.welcome(esc(ctx.from.first_name)), HTML);
-  if (user.birth) return showMenu(ctx);
-  return askBirth(ctx);
-});
+// /start открывает игру «9 уровней» (game.js)
+bot.command('start', (ctx) => sendIntro(ctx));
 
 bot.command('menu', (ctx) => showMenu(ctx));
 bot.command('date', (ctx) => askBirth(ctx));
@@ -385,6 +382,7 @@ bot.command('today', async (ctx) => {
 bot.command('stats', async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) return;
   const s = db.stats();
+  const funnel = db.gameFunnel().map((n, i) => `${i + 1}: ${n}`).join(' · ');
   const products = s.byProduct.map((p) => `${PRODUCTS[p.product]?.title ?? p.product}: ${p.n}`).join('\n') || '—';
   const sources = s.bySource
     .map((r) => `<code>${esc(r.source)}</code>: ${r.users} чел, бесплатно ${r.free}, купили ${r.buyers}, ${r.stars}⭐ + $${r.usd.toFixed(2)}`)
@@ -394,6 +392,7 @@ bot.command('stats', async (ctx) => {
       `👥 Пользователей: ${s.users} (+${s.users24h} за 24ч, +${s.users7d} за 7д)\n` +
       `📅 Указали дату: ${s.withBirth}\n🎁 Взяли бесплатный разбор: ${s.freeUsed}\n` +
       `☀️ Подписаны на прогноз: ${s.daily}\n🚫 Заблокировали бота: ${s.blocked}\n\n` +
+      `🎮 <b>Игра — дошли до уровня</b>\n${funnel}\n\n` +
       `⭐ Stars: ${s.stars.n} оплат, ${s.stars.s}⭐ (за 24ч ${s.stars24h}⭐)\n` +
       `💎 CryptoBot: ${s.crypto.n} оплат, $${s.crypto.s.toFixed(2)} (за 24ч $${s.crypto24h.toFixed(2)})\n\n` +
       `<b>Продажи по продуктам</b>\n${products}\n\n<b>Метки трафика</b>\n${sources}`,
@@ -503,6 +502,10 @@ bot.callbackQuery('daily', async (ctx) => {
   await ctx.reply(user.daily ? UI.dailyOff : UI.dailyOn);
 });
 
+// ---------- игра «9 уровней» ----------
+
+setupGame(bot);
+
 // ---------- ввод дат ----------
 
 bot.on('message:text', async (ctx) => {
@@ -520,7 +523,15 @@ bot.on('message:text', async (ctx) => {
     return offerPayment(ctx, 'compat', iso);
   }
 
-  if (user.state === 'await_birth' || !user.birth) {
+  // Дата в начале игры (или первая дата вообще) — запускаем игру
+  if (user.state === 'await_birth_game' || (!user.birth && user.state !== 'await_birth')) {
+    const birth = parseDate(text, nowTz().year);
+    if (!birth) return ctx.reply(UI.badDate, HTML);
+    db.setBirth(user.id, toIso(birth));
+    return afterBirth(ctx);
+  }
+
+  if (user.state === 'await_birth') {
     const birth = parseDate(text, nowTz().year);
     if (!birth) return ctx.reply(UI.badDate, HTML);
     db.setBirth(user.id, toIso(birth));

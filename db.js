@@ -73,6 +73,11 @@ CREATE INDEX IF NOT EXISTS idx_crypto_status ON crypto_invoices(status);
 CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
 `);
 
+// Миграции: новые колонки в существующей базе
+const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+if (!userCols.includes('game_level')) db.exec('ALTER TABLE users ADD COLUMN game_level INTEGER NOT NULL DEFAULT 0');
+if (!userCols.includes('game_request')) db.exec('ALTER TABLE users ADD COLUMN game_request TEXT');
+
 const now = () => Date.now();
 
 function tx(fn) {
@@ -125,6 +130,24 @@ export const dailyDue = (today) => qDailyDue.all(today);
 
 const qMarkDaily = db.prepare('UPDATE users SET last_daily = ? WHERE id = ?');
 export const markDaily = (id, today) => qMarkDaily.run(today, id);
+
+// ---------- игра «9 уровней» ----------
+
+// game_level — последний открытый уровень (0 — игра не начата, 9 — пройдена)
+const qGameLevel = db.prepare('UPDATE users SET game_level = MAX(game_level, ?) WHERE id = ?');
+export const setGameLevel = (id, level) => qGameLevel.run(level, id);
+
+const qGameRequest = db.prepare('UPDATE users SET game_request = ? WHERE id = ?');
+export const setGameRequest = (id, req) => qGameRequest.run(req, id);
+
+const qGameReset = db.prepare('UPDATE users SET game_level = 0, game_request = NULL WHERE id = ?');
+export const resetGame = (id) => qGameReset.run(id);
+
+// Воронка: сколько пользователей открыли каждый уровень
+export function gameFunnel() {
+  const q = db.prepare('SELECT COUNT(*) c FROM users WHERE game_level >= ?');
+  return Array.from({ length: 9 }, (_, i) => q.get(i + 1).c);
+}
 
 // ---------- права на разборы ----------
 
