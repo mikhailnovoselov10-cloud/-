@@ -48,7 +48,7 @@ async function notifyAdmins(text) {
 function mainMenu(user) {
   const year = nowTz().year;
   const kb = new InlineKeyboard()
-    .text('🔮 Разбор сферы', 'spheres').row()
+    .text('🔮 Разбор темы', 'spheres').row()
     .text(`💞 Совместимость — ${PRODUCTS.compat.stars}⭐`, 'compat').row()
     .text(
       db.hasItem(user.id, `year:${year}`) ? `📅 Прогноз на ${year} ✅` : `📅 Прогноз на год — ${PRODUCTS.year.stars}⭐`,
@@ -76,7 +76,7 @@ function sphereMenu(user) {
 
 const afterReadingKb = () =>
   new InlineKeyboard()
-    .text('🔮 Другие сферы', 'spheres').row()
+    .text('🔮 Другие темы', 'spheres').row()
     .text('💞 Совместимость', 'compat')
     .text('📅 Прогноз на год', 'year').row()
     .text(`🎁 Всё включено — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
@@ -143,7 +143,7 @@ async function deliverOrder(order) {
     const credits = db.getUser(uid).compat_credits;
     await bot.api.sendMessage(
       uid,
-      `🎁 <b>Пакет «Всё включено» активирован!</b>\n\n✅ Все сферы открыты\n✅ Прогноз на ${order.param} год\n✅ Совместимость: доступно ${credits}\n\nНачнём с прогноза на год 👇`,
+      `🎁 <b>Пакет «Всё включено» активирован!</b>\n\n✅ Все 7 тем открыты\n✅ Прогноз на ${order.param} год\n✅ Совместимость: доступно ${credits}\n\nНачнём с прогноза на год 👇`,
       HTML,
     );
     deliverItem(uid, `year:${order.param}`);
@@ -481,7 +481,7 @@ bot.callbackQuery('my', async (ctx) => {
   const user = db.getUser(ctx.from.id);
   const items = db.listItems(user.id);
   if (!items.length && !user.compat_credits) {
-    return ctx.reply(UI.myEmpty, { reply_markup: new InlineKeyboard().text('🔮 Выбрать сферу', 'spheres') });
+    return ctx.reply(UI.myEmpty, { reply_markup: new InlineKeyboard().text('🔮 Выбрать тему', 'spheres') });
   }
   const kb = new InlineKeyboard();
   for (const item of items) {
@@ -623,14 +623,9 @@ async function main() {
 
   setInterval(() => dailyTick().catch((e) => console.error('daily', e)), 60_000);
 
-  await bot.api.setMyCommands([
-    { command: 'menu', description: 'Меню' },
-    { command: 'today', description: 'Прогноз на сегодня' },
-    { command: 'date', description: 'Изменить дату рождения' },
-    { command: 'help', description: 'Помощь' },
-    { command: 'terms', description: 'Условия' },
-    { command: 'paysupport', description: 'Помощь с оплатой' },
-  ]);
+  // Без списка команд: у пользователя нет кнопки «Меню», он идёт по сюжету игры.
+  // Команды (/menu, /today, /paysupport, /stats…) продолжают работать, если их написать.
+  await bot.api.deleteMyCommands().catch(() => {});
 
   const stop = () => bot.stop();
   process.once('SIGINT', stop);

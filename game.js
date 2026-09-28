@@ -10,8 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { InlineKeyboard, InputFile, GrammyError } from 'grammy';
 import * as db from './db.js';
-import { PRODUCTS } from './config.js';
-import { fromIso, formatDate, matrixCodes, personalYear } from './numerology.js';
+import { PRODUCTS, SPHERES, SPHERE_KEYS, REQUEST_TO_SPHERE } from './config.js';
+import { fromIso, matrixCodes, personalYear } from './numerology.js';
 import { SHADOW, LINE } from './game_shadow.js';
 import { POTENTIAL } from './game_potential.js';
 import { REQUESTS, REQUEST_KEYS, YEAR_BREAK, G } from './game_texts.js';
@@ -92,9 +92,9 @@ function levelLine(n, code, side) {
   );
 }
 
-function level5intro(code) {
+function level5intro(code, name) {
   return (
-    `⭐ <b>Уровень 5 из 9</b>\n<b>Точка Б</b>\n\nТы уже увидел(а), что сформировало тебя.\n` +
+    `⭐ <b>Уровень 5 из 9</b>\n<b>Точка Б</b>\n\n${name ? name + ', ты' : 'Ты'} уже увидел(а), что сформировало тебя.\n` +
     `Теперь посмотри, <b>кем ты способен(на) стать</b>, если перестанешь жить по старым сценариям.\n\n` +
     `<b>ТВОЙ КОД ПОТЕНЦИАЛА: ${code}</b>\n\n<b>Вот каким человеком ты способен(на) стать</b>\n\n` +
     `👇👇👇👇 нажми ниже,\nчтобы открыть расшифровку 👇👇👇👇`
@@ -140,7 +140,7 @@ function level7(py) {
   );
 }
 
-function level8(code, reqKey) {
+function level8(code, reqKey, name) {
   const a = POTENTIAL[code];
   const r = REQUESTS[reqKey];
   const [q1, q2, q3] = a.insight;
@@ -150,7 +150,7 @@ function level8(code, reqKey) {
     `А у тебя включается другой вопрос:\n<b>${a.question}</b>\n\nПоэтому ты особенно раскрываешься там, где можно:\n` +
     `${a.spheres.map((s) => `✨ ${s}`).join('\n')}\n\nНо здесь есть одна ловушка.\n${a.trap}\n\n` +
     `Твоя точка роста:\n<b>${a.growth}</b>\n\n${r.end} ${a.outro}\n\n` +
-    `🎮 <b>Ну что, идём в финал?</b>\n\nТы уже прошёл(ла) <b>8 уровней из 9. Остался последний.</b>\n\n` +
+    `🎮 <b>Ну что${name ? ', ' + name : ''}, идём в финал?</b>\n\nТы уже прошёл(ла) <b>8 уровней из 9. Остался последний.</b>\n\n` +
     `Нажимай на кнопку ниже — открываем <b>9 уровень игры</b> ⬇️`
   );
 }
@@ -183,7 +183,8 @@ async function showLevel1(chatId) {
   await step(chatId, 'level1', G.level1, kb);
 }
 
-// Открыть уровень n (2–9). Ключ за уровень n-1 выдаётся при первом переходе.
+// Открыть уровень n (2–9). Как в примере: кнопка под уровнем N-1 → «КЛЮЧ №N-1 ПОЛУЧЕН» → уровень N.
+// Ключ №1 выдаётся при выборе запроса, поэтому перед уровнем 2 ключа нет; ключ №9 — после финала.
 async function showLevel(chatId, n, name) {
   const user = db.getUser(chatId);
   const c = codesOf(user);
@@ -191,7 +192,7 @@ async function showLevel(chatId, n, name) {
   const firstTime = user.game_level < n;
   if (firstTime) {
     db.setGameLevel(chatId, n);
-    await bot.api.sendMessage(chatId, G.key(n - 1), HTML);
+    if (n >= 3) await bot.api.sendMessage(chatId, G.key(n - 1), HTML);
   }
 
   switch (n) {
@@ -202,7 +203,7 @@ async function showLevel(chatId, n, name) {
     case 4:
       return step(chatId, 'level4', levelLine(4, c.dad, 'dad'), next('🎲 ДАЛЬШЕ'));
     case 5:
-      return step(chatId, 'level5', level5intro(c.potential), new InlineKeyboard().text('🔎 Узнать', 'g:l5'));
+      return step(chatId, 'level5', level5intro(c.potential, name), new InlineKeyboard().text('🔎 Узнать', 'g:l5'));
     case 6:
       await step(chatId, 'level6', G.level6intro);
       await sleep(1500);
@@ -212,20 +213,30 @@ async function showLevel(chatId, n, name) {
       return step(chatId, 'level7', level7(personalYear(fromIso(user.birth), now.getFullYear())), next('ДА, ХОЧУ УЗНАТЬ'));
     }
     case 8:
-      return step(chatId, 'level8', level8(c.archetype, user.game_request), next('Открыть финальный уровень 🎲'));
-    case 9: {
-      await step(chatId, 'level9', G.finale(name));
-      await sleep(1200);
-      const kb = new InlineKeyboard();
-      if (!user.free_sphere) kb.text('🎁 Забрать подарок — разбор сферы', 'spheres').row();
-      kb.text(`🎁 Всё включено — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
-        .text(`📅 Прогноз на год — ${PRODUCTS.year.stars}⭐`, 'year').row()
-        .text(`💞 Совместимость — ${PRODUCTS.compat.stars}⭐`, 'compat').row()
-        .text('🔮 Разборы сфер', 'spheres').row()
-        .text('≡ Меню', 'menu');
-      return step(chatId, 'level9_offer', G.finaleOffer(!!user.free_sphere), kb);
-    }
+      return step(chatId, 'level8', level8(c.archetype, user.game_request, name), next('Открыть финальный уровень 🎲'));
+    case 9:
+      return step(chatId, 'level9', G.finale(name), new InlineKeyboard().text('🗝 ЗАБРАТЬ 9-Й КЛЮЧ', 'g:end'));
   }
+}
+
+// После 9-го ключа: подарок (разбор темы из начала игры) и остальные 6 тем
+async function showOffer(chatId, name) {
+  const user = db.getUser(chatId);
+  const giftKey = REQUEST_TO_SPHERE[user.game_request] ?? 'purpose';
+  const giftUsed = !!user.free_sphere;
+  await step(chatId, 'level9_key', G.key9(name));
+  await sleep(1200);
+
+  const kb = new InlineKeyboard();
+  const label = (k) => `${SPHERES[k].emoji} ${SPHERES[k].name}`;
+  if (!giftUsed) kb.text(`🎁 Забрать подарок: ${label(giftKey)}`, `sp:${giftKey}`).row();
+  for (const k of SPHERE_KEYS) {
+    if (!giftUsed && k === giftKey) continue;
+    const owned = db.hasItem(chatId, `sphere:${k}`);
+    kb.text(`${label(k)} — ${owned ? '✅' : `${PRODUCTS.sphere.stars}⭐`}`, `sp:${k}`).row();
+  }
+  kb.text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack');
+  await step(chatId, 'level9_offer', G.finaleOffer(`${SPHERES[giftKey].emoji} ${SPHERES[giftKey].name}`, giftUsed), kb);
 }
 
 // Обёртка: один шаг игры за раз на пользователя, ошибки не роняют бота
@@ -260,50 +271,45 @@ export function afterBirth(ctx) {
 
 // Приветствие игры (/start)
 export function sendIntro(ctx) {
-  const user = db.getUser(ctx.from.id);
   const kb = new InlineKeyboard().text('🎲 начать игру', 'g:start');
-  if (user?.birth) kb.row().text('≡ Меню', 'menu');
   return step(ctx.chat.id, 'intro', G.intro(escName(ctx.from.first_name)), kb);
 }
+
+// Как в примере: после нажатия кнопки она исчезает из сообщения уровня,
+// и «КЛЮЧ №N ПОЛУЧЕН» оказывается прямо под текстом уровня
+const dropKb = (ctx) => ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
 
 const escName = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 
 export function setupGame(b) {
   bot = b;
 
-  // Начать игру: спрашиваем дату или предлагаем использовать сохранённую
+  // Начать игру: всегда просим ввести дату рождения
   bot.callbackQuery('g:start', (ctx) => run(ctx, async () => {
-    const user = db.getUser(ctx.from.id);
-    if (!user.birth) {
-      db.setState(user.id, 'await_birth_game');
-      return step(user.id, 'identify', G.identify);
-    }
-    const kb = new InlineKeyboard().text('✅ Да, начать', 'g:go').row().text('✏️ Другая дата', 'g:newdate');
-    await bot.api.sendMessage(user.id, `🧬 <b>Идентификация</b>\n\nТвоя дата рождения: <b>${formatDate(fromIso(user.birth))}</b>\nНачинаем расшифровку?`, { ...HTML, reply_markup: kb });
-  }));
-
-  bot.callbackQuery('g:newdate', (ctx) => run(ctx, async () => {
+    await dropKb(ctx);
     db.setState(ctx.from.id, 'await_birth_game');
     await step(ctx.from.id, 'identify', G.identify);
   }));
 
-  bot.callbackQuery('g:go', async (ctx) => {
-    const id = ctx.from.id;
-    if (!db.getUser(id)?.birth) return ctx.answerCallbackQuery();
-    return run(ctx, async () => {
-      db.resetGame(id);
-      await analysis(id);
-      await showLevel1(id);
-    });
-  });
-
-  // Уровень 1: выбор запроса
+  // Уровень 1: выбор запроса → ключ №1 → «маршрут построен»
   bot.callbackQuery(/^g:req:(\w+)$/, (ctx) => run(ctx, async () => {
     const key = ctx.match[1];
     const user = db.getUser(ctx.from.id);
     if (!REQUESTS[key] || !user.birth || user.game_level < 1) return;
+    const firstTime = !user.game_request;
+    await dropKb(ctx);
     db.setGameRequest(user.id, key);
-    await step(user.id, 'route', G.route(REQUESTS[key].name), new InlineKeyboard().text('➡️ Перейти на следующий уровень', 'g:lvl:2'));
+    if (firstTime) await bot.api.sendMessage(user.id, G.key(1), HTML);
+    await step(user.id, 'route', G.route(escName(ctx.from.first_name), REQUESTS[key].name),
+      new InlineKeyboard().text('➡️ Перейти на следующий уровень', 'g:lvl:2'));
+  }));
+
+  // После финала: ключ №9 и предложение тем
+  bot.callbackQuery('g:end', (ctx) => run(ctx, async () => {
+    const user = db.getUser(ctx.from.id);
+    if (!user.birth || !user.game_request || user.game_level < 9) return;
+    await dropKb(ctx);
+    await showOffer(user.id, escName(ctx.from.first_name));
   }));
 
   // Уровни 2–9: открывать можно только следующий или уже пройденный
@@ -311,6 +317,7 @@ export function setupGame(b) {
     const n = Number(ctx.match[1]);
     const user = db.getUser(ctx.from.id);
     if (!user.birth || !user.game_request || n > user.game_level + 1) return;
+    await dropKb(ctx);
     await showLevel(user.id, n, escName(ctx.from.first_name));
   }));
 
@@ -318,6 +325,7 @@ export function setupGame(b) {
   bot.callbackQuery('g:l5', (ctx) => run(ctx, async () => {
     const user = db.getUser(ctx.from.id);
     if (!user.birth || user.game_level < 5) return;
+    await dropKb(ctx);
     await step(user.id, 'level5_more', level5more(codesOf(user).potential));
     const voice = findMedia('level5_voice', [['ogg', 'voice'], ['oga', 'voice'], ['mp3', 'audio'], ['m4a', 'audio']]);
     const kb = new InlineKeyboard().text('➡️ Перейти на следующий уровень', 'g:lvl:6');

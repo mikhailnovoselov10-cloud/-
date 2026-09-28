@@ -44,14 +44,14 @@ export function sphereReading(birth, sphereKey, year) {
     `🔢 <b>Ваше число жизненного пути — ${lp}</b>\n«${NUMBERS[lp].title}»\n\n${NUMBERS[lp].core}`,
     `${sphere.emoji} <b>${sphere.name}: ваш стиль</b>\n\n${st.byNumber[lpBase]}` +
       (isMaster(lp) ? '\n\nМастер-число усиливает эти качества: вы способны проявить их ярче и глубже, чем большинство людей.' : ''),
-    `🎂 <b>Число дня рождения — ${bd}</b>\n\n${BIRTHDAY[bd]}\n\nВ сфере «${sphere.name.toLowerCase()}» этот талант помогает вам раскрываться естественно, без лишних усилий.`,
-    `🔷 <b>Квадрат Пифагора</b>\n\n${PYTHAGORAS[strong].text}\n\nСочетание с числом ${lp} делает эту черту вашей опорой в сфере «${sphere.name.toLowerCase()}».`,
+    `🎂 <b>Число дня рождения — ${bd}</b>\n\n${BIRTHDAY[bd]}\n\nВ теме «${sphere.name.toLowerCase()}» этот талант помогает вам раскрываться естественно, без лишних усилий.`,
+    `🔷 <b>Квадрат Пифагора</b>\n\n${PYTHAGORAS[strong].text}\n\nСочетание с числом ${lp} делает эту черту вашей опорой в теме «${sphere.name.toLowerCase()}».`,
     `💫 <b>Ваша суперсила</b>\n\nЧисло пути ${lp}, число дня рождения ${bd} и выраженная ${strong}-ка в квадрате вместе дают редкое сочетание: ` +
       `${NUMBERS[lp].title.toLowerCase().replace(/ \(.*\)$/, '')} с талантом «${PYTHAGORAS[strong].name}». Это то, что отличает вас от других — опирайтесь на это смело.`,
     `📅 <b>${year}: личный год ${py} — ${yearInfo.title}</b>\n\n${yearInfo.text}` +
-      (yearAccent ? `\n\nВ сфере «${sphere.name.toLowerCase()}»: ${yearAccent}.` : ''),
+      (yearAccent ? `\n\nВ теме «${sphere.name.toLowerCase()}»: ${yearAccent}.` : ''),
     `✅ <b>Советы для вас</b>\n\n` + pickTips(st.tips, lpBase, bd, py).map((t) => `• ${t}`).join('\n'),
-    `🌈 Это ваш разбор сферы «${sphere.name}».\n\nПомните: цифры показывают потенциал, а раскрываете его вы. У вас для этого есть всё ✨`,
+    `🌈 Это ваш разбор темы «${sphere.name}».\n\nПомните: цифры показывают потенциал, а раскрываете его вы. У вас для этого есть всё ✨`,
   ];
 }
 

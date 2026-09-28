@@ -80,20 +80,28 @@ export const PAID_PAUSE_MS = Number(env.PAID_PAUSE_MS || 1500);
 export const SUPPORT_CONTACT = env.SUPPORT_CONTACT || '';
 
 // Сферы разбора
+// Те же 7 тем, что в начале игры (ключ career = «Самореализация»)
 export const SPHERES = {
-  love: { emoji: '💖', name: 'Любовь и отношения' },
-  money: { emoji: '💰', name: 'Деньги и изобилие' },
-  career: { emoji: '🚀', name: 'Карьера и призвание' },
-  purpose: { emoji: '🌟', name: 'Предназначение' },
-  energy: { emoji: '⚡', name: 'Энергия и ресурс' },
+  money: { emoji: '💰', name: 'Деньги' },
+  love: { emoji: '❤️', name: 'Отношения' },
+  purpose: { emoji: '✨', name: 'Предназначение' },
+  career: { emoji: '🚀', name: 'Самореализация' },
+  anxiety: { emoji: '🌀', name: 'Тревога и ясность' },
+  energy: { emoji: '🪫', name: 'Энергия' },
+  scale: { emoji: '📈', name: 'Масштаб' },
+};
+
+// Запрос из игры → тема разбора
+export const REQUEST_TO_SPHERE = {
+  money: 'money', love: 'love', purpose: 'purpose', self: 'career', anxiety: 'anxiety', energy: 'energy', scale: 'scale',
 };
 export const SPHERE_KEYS = Object.keys(SPHERES);
 
 // Продукты: stars — цена в Telegram Stars, usd — цена счёта в CryptoBot
 export const PRODUCTS = {
   sphere: {
-    title: 'Разбор сферы',
-    description: 'Подробный разбор выбранной сферы по дате рождения',
+    title: 'Разбор темы',
+    description: 'Подробный разбор выбранной темы по дате рождения',
     stars: 99,
     usd: '1.49',
   },
@@ -111,7 +119,7 @@ export const PRODUCTS = {
   },
   pack: {
     title: 'Пакет «Всё включено»',
-    description: 'Все сферы + прогноз на год + одна совместимость',
+    description: 'Все 7 тем + прогноз на год + одна совместимость',
     stars: 349,
     usd: '4.99',
   },
