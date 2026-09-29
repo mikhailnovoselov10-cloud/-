@@ -52,19 +52,20 @@ function sphereMenu(user) {
     const s = SPHERES[key];
     let mark;
     if (db.hasItem(user.id, `sphere:${key}`)) mark = '✅';
-    else if (!user.free_sphere) mark = '🎁 бесплатно';
+    else if (!user.free_sphere || user.topic_credits > 0) mark = '🎁 бесплатно';
     else mark = `${PRODUCTS.sphere.stars}⭐`;
     kb.text(`${s.emoji} ${s.name} · ${mark}`, `sp:${key}`).row();
   }
   return kb
     .text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
-    .text('📚 Мои разборы', 'my');
+    .text('👥 Пригласи друга — тема бесплатно', 'ref');
 }
 
 const afterReadingKb = () =>
   new InlineKeyboard()
     .text('🔮 Выбрать другую тему', 'spheres').row()
-    .text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack');
+    .text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
+    .text('👥 Пригласи друга — тема бесплатно', 'ref');
 
 async function showMenu(ctx, text = UI.chooseSphere) {
   const user = db.getUser(ctx.from.id);
@@ -164,7 +165,9 @@ bot.use(async (ctx, next) => {
 bot.use(async (ctx, next) => {
   if (ctx.from && !ctx.from.is_bot) {
     const m = ctx.message?.text?.match(/^\/start(?:@\w+)?\s+([\w-]{1,64})$/);
-    db.touchUser(ctx.from, m ? m[1] : null);
+    const ref = m?.[1].match(/^ref_(\d+)$/);
+    // /start ref_123 — приглашение от пользователя 123, метка трафика «ref»
+    db.touchUser(ctx.from, ref ? 'ref' : (m ? m[1] : null), ref ? Number(ref[1]) : null);
   }
   return next();
 });
@@ -406,7 +409,7 @@ bot.command('stats', async (ctx) => {
     `📊 <b>Статистика</b>\n\n` +
       `👥 Пользователей: ${s.users} (+${s.users24h} за 24ч, +${s.users7d} за 7д)\n` +
       `📅 Указали дату: ${s.withBirth}\n🎁 Взяли бесплатный разбор: ${s.freeUsed}\n` +
-      `🚫 Заблокировали бота: ${s.blocked}\n\n` +
+      `🚫 Заблокировали бота: ${s.blocked}\n👥 По приглашениям: пришли ${s.refs.invited}, прошли игру ${s.refs.done}\n\n` +
       `🎮 <b>Игра — дошли до уровня</b>\n${funnel}\n\n` +
       `⭐ Stars: ${s.stars.n} оплат, ${s.stars.s}⭐ (за 24ч ${s.stars24h}⭐)\n` +
       `💎 CryptoBot: ${s.crypto.n} оплат, $${s.crypto.s.toFixed(2)} (за 24ч $${s.crypto24h.toFixed(2)})\n\n` +
@@ -443,6 +446,7 @@ bot.callbackQuery(/^sp:(\w+)$/, async (ctx) => {
   const item = `sphere:${key}`;
   if (db.hasItem(user.id, item)) return deliverItem(user.id, item);
   if (db.claimFreeSphere(user.id, key)) return deliverItem(user.id, item, FREE_PAUSE_MS);
+  if (db.useTopicCredit(user.id, key)) return deliverItem(user.id, item); // тема за приглашённого друга
   return offerPayment(ctx, 'sphere', key);
 });
 
@@ -486,23 +490,23 @@ bot.callbackQuery('pack', async (ctx) => {
   return offerPayment(ctx, 'pack', String(nowTz().year));
 });
 
+// Старая кнопка «Мои разборы» из прошлых сообщений — просто показываем темы
 bot.callbackQuery('my', async (ctx) => {
   await ctx.answerCallbackQuery();
-  const user = db.getUser(ctx.from.id);
-  const items = db.listItems(user.id);
-  if (!items.length && !user.compat_credits) {
-    return ctx.reply(UI.myEmpty, { reply_markup: new InlineKeyboard().text('🔮 Выбрать тему', 'spheres') });
-  }
-  const kb = new InlineKeyboard();
-  for (const item of items) {
-    const [kind, param] = item.split(':');
-    if (kind === 'sphere') kb.text(`${SPHERES[param].emoji} ${SPHERES[param].name}`, `sp:${param}`).row();
-    if (kind === 'year') kb.text(`📅 Прогноз на ${param}`, `yr:${param}`).row();
-    if (kind === 'compat') kb.text(`💞 Совместимость с ${formatDate(fromIso(param))}`, `cp:${param}`).row();
-  }
-  if (user.compat_credits) kb.text(`💞 Новая совместимость (доступно ${user.compat_credits})`, 'compat').row();
-  kb.text('« Все темы', 'spheres');
-  await ctx.reply('📚 <b>Мои разборы</b>\nНажмите, чтобы открыть снова:', { ...HTML, reply_markup: kb });
+  await showMenu(ctx);
+});
+
+// Реферальная программа: друг прошёл игру по твоей ссылке → тебе тема бесплатно
+bot.callbackQuery('ref', async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const link = `https://t.me/${bot.botInfo.username}?start=ref_${ctx.from.id}`;
+  const r = db.referralInfo(ctx.from.id);
+  const share = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(UI.refShareText)}`;
+  await ctx.reply(UI.refInfo(link, r), {
+    ...HTML,
+    link_preview_options: { is_disabled: true },
+    reply_markup: new InlineKeyboard().url('📤 Отправить другу', share).row().text('« Все темы', 'spheres'),
+  });
 });
 
 // ---------- игра «9 уровней» ----------

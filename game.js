@@ -15,6 +15,7 @@ import { fromIso, matrixCodes, personalYear } from './numerology.js';
 import { SHADOW, LINE } from './game_shadow.js';
 import { POTENTIAL } from './game_potential.js';
 import { REQUESTS, REQUEST_KEYS, YEAR_BREAK, G } from './game_texts.js';
+import { UI } from './texts.js';
 
 const HTML = { parse_mode: 'HTML' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -235,7 +236,8 @@ async function showOffer(chatId, name) {
     const owned = db.hasItem(chatId, `sphere:${k}`);
     kb.text(`${label(k)} — ${owned ? '✅' : `${PRODUCTS.sphere.stars}⭐`}`, `sp:${k}`).row();
   }
-  kb.text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack');
+  kb.text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
+    .text('👥 Пригласи друга — тема бесплатно', 'ref');
   await step(chatId, 'level9_offer', G.finaleOffer(`${SPHERES[giftKey].emoji} ${SPHERES[giftKey].name}`, giftUsed), kb);
 }
 
@@ -310,6 +312,14 @@ export function setupGame(b) {
     if (!user.birth || !user.game_request || user.game_level < 9) return;
     await dropKb(ctx);
     await showOffer(user.id, escName(ctx.from.first_name));
+    // Друг прошёл игру по приглашению → пригласившему тема бесплатно (один раз)
+    const referrer = db.rewardReferral(user.id);
+    if (referrer) {
+      await bot.api.sendMessage(referrer, UI.refReward(escName(ctx.from.first_name)), {
+        ...HTML,
+        reply_markup: new InlineKeyboard().text('🎁 Выбрать тему', 'spheres'),
+      }).catch(() => {});
+    }
   }));
 
   // Уровни 2–9: открывать можно только следующий или уже пройденный

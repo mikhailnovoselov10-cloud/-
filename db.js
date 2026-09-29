@@ -77,6 +77,14 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id);
 const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
 if (!userCols.includes('game_level')) db.exec('ALTER TABLE users ADD COLUMN game_level INTEGER NOT NULL DEFAULT 0');
 if (!userCols.includes('game_request')) db.exec('ALTER TABLE users ADD COLUMN game_request TEXT');
+const addCol = (name, def) => { if (!userCols.includes(name)) db.exec(`ALTER TABLE users ADD COLUMN ${name} ${def}`); };
+addCol('referrer_id', 'INTEGER'); // кто пригласил
+addCol('ref_rewarded', 'INTEGER NOT NULL DEFAULT 0'); // награда пригласившему уже выдана
+addCol('topic_credits', 'INTEGER NOT NULL DEFAULT 0'); // бесплатные темы за приглашения
+addCol('game_at', 'INTEGER'); // время последнего шага игры (для напоминаний)
+addCol('drip_step', 'INTEGER NOT NULL DEFAULT 0'); // шаг прогревающей цепочки после игры
+addCol('nudge_step', 'INTEGER NOT NULL DEFAULT 0'); // напоминания бросившим игру
+db.exec('CREATE INDEX IF NOT EXISTS idx_users_referrer ON users(referrer_id)');
 
 const now = () => Date.now();
 
@@ -95,15 +103,49 @@ function tx(fn) {
 // ---------- пользователи ----------
 
 const qUpsertUser = db.prepare(`
-  INSERT INTO users (id, username, first_name, source, created_at) VALUES (?, ?, ?, ?, ?)
+  INSERT INTO users (id, username, first_name, source, referrer_id, created_at) VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT(id) DO UPDATE SET username = excluded.username, first_name = excluded.first_name, blocked = 0
 `);
 const qGetUser = db.prepare('SELECT * FROM users WHERE id = ?');
 
-// Создаёт пользователя; метка трафика (source) сохраняется только при первом визите
-export function touchUser(from, source = null) {
-  qUpsertUser.run(from.id, from.username ?? null, from.first_name ?? null, source, now());
+// Создаёт пользователя; метка трафика (source) и пригласивший (referrer)
+// сохраняются только при первом визите — существующего пользователя «пригласить» нельзя
+export function touchUser(from, source = null, referrerId = null) {
+  const ref = referrerId && referrerId !== from.id && qGetUser.get(referrerId) ? referrerId : null;
+  qUpsertUser.run(from.id, from.username ?? null, from.first_name ?? null, source, ref, now());
   return qGetUser.get(from.id);
+}
+
+// ---------- рефералы ----------
+
+// Друг прошёл игру → пригласившему +1 бесплатная тема. Выдаётся один раз на друга.
+// Возвращает id пригласившего, если награда выдана сейчас.
+export function rewardReferral(userId) {
+  return tx(() => {
+    const u = qGetUser.get(userId);
+    if (!u?.referrer_id) return null;
+    const r = db.prepare('UPDATE users SET ref_rewarded = 1 WHERE id = ? AND ref_rewarded = 0').run(userId);
+    if (r.changes !== 1) return null;
+    db.prepare('UPDATE users SET topic_credits = topic_credits + 1 WHERE id = ?').run(u.referrer_id);
+    return u.referrer_id;
+  });
+}
+
+// Открыть тему за приглашение (атомарно списывает 1 кредит)
+export function useTopicCredit(userId, sphere) {
+  return tx(() => {
+    const item = `sphere:${sphere}`;
+    if (qEnt.get(userId, item)) return true;
+    const r = db.prepare('UPDATE users SET topic_credits = topic_credits - 1 WHERE id = ? AND topic_credits > 0').run(userId);
+    if (r.changes !== 1) return false;
+    grant(userId, item);
+    return true;
+  });
+}
+
+export function referralInfo(userId) {
+  const q = db.prepare('SELECT COUNT(*) invited, COALESCE(SUM(ref_rewarded), 0) done FROM users WHERE referrer_id = ?').get(userId);
+  return { invited: q.invited, done: q.done, credits: qGetUser.get(userId)?.topic_credits ?? 0 };
 }
 
 export const getUser = (id) => qGetUser.get(id);
@@ -305,6 +347,7 @@ export function stats() {
     freeUsed: one('SELECT COUNT(*) c FROM users WHERE free_sphere IS NOT NULL').c,
     daily: one('SELECT COUNT(*) c FROM users WHERE daily = 1 AND blocked = 0 AND birth IS NOT NULL').c,
     blocked: one('SELECT COUNT(*) c FROM users WHERE blocked = 1').c,
+    refs: one('SELECT COUNT(*) invited, COALESCE(SUM(ref_rewarded), 0) done FROM users WHERE referrer_id IS NOT NULL'),
     stars: one(`SELECT COUNT(*) n, COALESCE(SUM(CAST(amount AS INTEGER)), 0) s FROM payments WHERE provider = 'stars' AND status = 'ok'`),
     crypto: one(`SELECT COUNT(*) n, COALESCE(SUM(CAST(amount AS REAL)), 0) s FROM payments WHERE provider = 'cryptobot' AND status = 'ok'`),
     stars24h: one(`SELECT COALESCE(SUM(CAST(amount AS INTEGER)), 0) s FROM payments WHERE provider = 'stars' AND status = 'ok' AND created_at > ?`, dayAgo).s,

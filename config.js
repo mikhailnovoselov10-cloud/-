@@ -120,7 +120,7 @@ export const PRODUCTS = {
   pack: {
     title: 'Пакет «Всё включено»',
     description: 'Все 7 тем + прогноз на год + одна совместимость',
-    stars: 349,
-    usd: '4.99',
+    stars: 499,
+    usd: '6.99',
   },
 };
