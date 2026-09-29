@@ -3,14 +3,14 @@
 import dns from 'node:dns';
 import { Bot, InlineKeyboard, GrammyError } from 'grammy';
 import {
-  BOT_TOKEN, ADMIN_IDS, TIMEZONE, DAILY_HOUR, FREE_PAUSE_MS, PAID_PAUSE_MS,
+  BOT_TOKEN, ADMIN_IDS, TIMEZONE, FREE_PAUSE_MS, PAID_PAUSE_MS,
   SUPPORT_CONTACT, SPHERES, SPHERE_KEYS, PRODUCTS, CRYPTOPAY_POLL_MS, CRYPTOPAY_TESTNET,
   httpsAgent, PROXY_LABEL,
 } from './config.js';
 import * as db from './db.js';
 import * as cp from './cryptopay.js';
 import { parseDate, toIso, fromIso, formatDate, lifePath } from './numerology.js';
-import { sphereReading, yearReading, compatReading, dailyForecast } from './reading.js';
+import { sphereReading, yearReading, compatReading } from './reading.js';
 import { NUMBERS, UI } from './texts.js';
 import { setupGame, afterBirth, sendIntro } from './game.js';
 
@@ -56,8 +56,7 @@ function mainMenu(user) {
     ).row()
     .text(`🎁 Всё включено — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
     .text('📚 Мои разборы', 'my').row()
-    .text(user.daily ? '☀️ Прогноз по утрам: вкл' : '🌙 Прогноз по утрам: выкл', 'daily')
-    .text('✏️ Дата', 'date');
+    .text('✏️ Изменить дату', 'date');
   return kb;
 }
 
@@ -152,6 +151,30 @@ async function deliverOrder(order) {
   }
   db.markDelivered(order.id);
 }
+
+// Защита от спама: не больше 15 действий за 10 секунд на пользователя.
+// Оплата (pre_checkout_query, successful_payment) и админы не ограничиваются.
+const FLOOD_WINDOW_MS = 10_000;
+const FLOOD_LIMIT = 15;
+const hits = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, arr] of hits) if (!arr.length || now - arr[arr.length - 1] > FLOOD_WINDOW_MS) hits.delete(id);
+}, 60_000);
+
+bot.use(async (ctx, next) => {
+  const id = ctx.from?.id;
+  if (!id || ADMIN_IDS.includes(id) || ctx.preCheckoutQuery || ctx.message?.successful_payment) return next();
+  const now = Date.now();
+  const arr = (hits.get(id) ?? []).filter((t) => now - t < FLOOD_WINDOW_MS);
+  arr.push(now);
+  hits.set(id, arr);
+  if (arr.length > FLOOD_LIMIT) {
+    if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: 'Не так быстро 🙂 Подожди пару секунд' }).catch(() => {});
+    return; // лишние нажатия молча игнорируем
+  }
+  return next();
+});
 
 // Каждый апдейт: пользователь есть в базе. Метка трафика из /start метка
 // сохраняется только при первом визите (touchUser не перезаписывает source).
@@ -373,10 +396,12 @@ bot.command('help', (ctx) => ctx.reply(UI.help));
 bot.command('terms', (ctx) => ctx.reply(UI.terms));
 bot.command('paysupport', (ctx) => ctx.reply(UI.paySupport(SUPPORT_CONTACT)));
 
-bot.command('today', async (ctx) => {
-  const user = db.getUser(ctx.from.id);
-  if (!user.birth) return askBirth(ctx);
-  await ctx.reply(dailyForecast(fromIso(user.birth), nowTz()), HTML);
+// Для админа: сбросить свой прогресс (игра, подарок, открытые разборы), чтобы пройти всё заново.
+// Заказы и платежи не удаляются.
+bot.command('reset', async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return;
+  db.resetUser(ctx.from.id);
+  await ctx.reply('🔄 Твой прогресс сброшен. Отправь /start, чтобы пройти игру заново.');
 });
 
 bot.command('stats', async (ctx) => {
@@ -391,7 +416,7 @@ bot.command('stats', async (ctx) => {
     `📊 <b>Статистика</b>\n\n` +
       `👥 Пользователей: ${s.users} (+${s.users24h} за 24ч, +${s.users7d} за 7д)\n` +
       `📅 Указали дату: ${s.withBirth}\n🎁 Взяли бесплатный разбор: ${s.freeUsed}\n` +
-      `☀️ Подписаны на прогноз: ${s.daily}\n🚫 Заблокировали бота: ${s.blocked}\n\n` +
+      `🚫 Заблокировали бота: ${s.blocked}\n\n` +
       `🎮 <b>Игра — дошли до уровня</b>\n${funnel}\n\n` +
       `⭐ Stars: ${s.stars.n} оплат, ${s.stars.s}⭐ (за 24ч ${s.stars24h}⭐)\n` +
       `💎 CryptoBot: ${s.crypto.n} оплат, $${s.crypto.s.toFixed(2)} (за 24ч $${s.crypto24h.toFixed(2)})\n\n` +
@@ -495,13 +520,6 @@ bot.callbackQuery('my', async (ctx) => {
   await ctx.reply('📚 <b>Мои разборы</b>\nНажмите, чтобы открыть снова:', { ...HTML, reply_markup: kb });
 });
 
-bot.callbackQuery('daily', async (ctx) => {
-  await ctx.answerCallbackQuery();
-  const user = db.getUser(ctx.from.id);
-  db.setDaily(user.id, !user.daily);
-  await ctx.reply(user.daily ? UI.dailyOff : UI.dailyOn);
-});
-
 // ---------- игра «9 уровней» ----------
 
 setupGame(bot);
@@ -545,41 +563,6 @@ bot.on('message:text', async (ctx) => {
   return showMenu(ctx);
 });
 
-// ---------- ежедневный прогноз ----------
-
-let dailyBusy = false;
-async function dailyTick() {
-  const t = nowTz();
-  // Окно рассылки — 3 часа с DAILY_HOUR, чтобы пережить короткий перезапуск бота
-  if (dailyBusy || t.hour < DAILY_HOUR || t.hour >= DAILY_HOUR + 3) return;
-  dailyBusy = true;
-  try {
-    let batch;
-    while ((batch = db.dailyDue(t.iso)).length) {
-      for (const u of batch) {
-        try {
-          await bot.api.sendMessage(u.id, dailyForecast(fromIso(u.birth), t), {
-            ...HTML,
-            reply_markup: new InlineKeyboard()
-              .text('📅 Прогноз на год', 'year')
-              .text('🔕 Отключить', 'daily'),
-          });
-        } catch (e) {
-          if (e instanceof GrammyError && e.error_code === 403) db.setBlocked(u.id);
-          else if (e instanceof GrammyError && e.error_code === 429) {
-            await sleep((e.parameters?.retry_after ?? 5) * 1000);
-            continue; // повторим этого пользователя в следующей пачке
-          } else console.error('daily', u.id, e.message);
-        }
-        db.markDaily(u.id, t.iso);
-        await sleep(50); // ~20 сообщений в секунду, в пределах лимитов Telegram
-      }
-    }
-  } finally {
-    dailyBusy = false;
-  }
-}
-
 // ---------- запуск ----------
 
 bot.catch((err) => console.error('Ошибка обработки апдейта', err.error));
@@ -621,10 +604,8 @@ async function main() {
     console.log('CRYPTOPAY_TOKEN не задан — доступна только оплата Stars');
   }
 
-  setInterval(() => dailyTick().catch((e) => console.error('daily', e)), 60_000);
-
   // Без списка команд: у пользователя нет кнопки «Меню», он идёт по сюжету игры.
-  // Команды (/menu, /today, /paysupport, /stats…) продолжают работать, если их написать.
+  // Команды (/menu, /paysupport, /stats, /reset…) продолжают работать, если их написать.
   await bot.api.deleteMyCommands().catch(() => {});
 
   const stop = () => bot.stop();

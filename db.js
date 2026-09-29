@@ -143,6 +143,15 @@ export const setGameRequest = (id, req) => qGameRequest.run(req, id);
 const qGameReset = db.prepare('UPDATE users SET game_level = 0, game_request = NULL WHERE id = ?');
 export const resetGame = (id) => qGameReset.run(id);
 
+// Полный сброс прогресса пользователя (для тестов админа). Заказы и платежи остаются.
+export function resetUser(id) {
+  tx(() => {
+    db.prepare('DELETE FROM entitlements WHERE user_id = ?').run(id);
+    db.prepare(`UPDATE users SET birth = NULL, state = NULL, free_sphere = NULL, compat_credits = 0,
+      game_level = 0, game_request = NULL WHERE id = ?`).run(id);
+  });
+}
+
 // Воронка: сколько пользователей открыли каждый уровень
 export function gameFunnel() {
   const q = db.prepare('SELECT COUNT(*) c FROM users WHERE game_level >= ?');
