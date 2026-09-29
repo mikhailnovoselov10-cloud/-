@@ -40,7 +40,9 @@ async function call(method, params = {}) {
     data = JSON.parse(res.text);
   } catch {}
   if (!data.ok) {
-    throw new Error(`CryptoPay ${method}: ${JSON.stringify(data.error ?? res.status)}`);
+    // Текст ответа (без токена) помогает понять причину: неверный токен, сбой CryptoBot и т.п.
+    const detail = data.error ? JSON.stringify(data.error) : `${res.status} ${res.text.replace(/\s+/g, ' ').slice(0, 200)}`;
+    throw new Error(`CryptoPay ${method}: ${detail}`);
   }
   return data.result;
 }

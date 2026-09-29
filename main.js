@@ -373,13 +373,21 @@ bot.callbackQuery(/^chk:(\d+)$/, async (ctx) => {
 });
 
 let cryptoBusy = false;
+let lastPollError = { msg: '', at: 0 };
 async function cryptoPollTick() {
   if (cryptoBusy) return;
   cryptoBusy = true;
   try {
     await checkCryptoInvoices(db.activeCryptoInvoices());
+    if (lastPollError.msg) console.log('crypto poll: снова работает');
+    lastPollError = { msg: '', at: 0 };
   } catch (e) {
-    console.error('crypto poll', e.message);
+    // Временные сбои CryptoBot не страшны: следующая проверка через 15 секунд.
+    // Одну и ту же ошибку пишем в лог не чаще раза в 10 минут.
+    if (e.message !== lastPollError.msg || Date.now() - lastPollError.at > 600_000) {
+      console.error('crypto poll', e.message);
+      lastPollError = { msg: e.message, at: Date.now() };
+    }
   } finally {
     cryptoBusy = false;
   }
