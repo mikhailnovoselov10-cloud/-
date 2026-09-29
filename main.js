@@ -45,21 +45,7 @@ async function notifyAdmins(text) {
 
 // ---------- клавиатуры ----------
 
-function mainMenu(user) {
-  const year = nowTz().year;
-  const kb = new InlineKeyboard()
-    .text('🔮 Разбор темы', 'spheres').row()
-    .text(`💞 Совместимость — ${PRODUCTS.compat.stars}⭐`, 'compat').row()
-    .text(
-      db.hasItem(user.id, `year:${year}`) ? `📅 Прогноз на ${year} ✅` : `📅 Прогноз на год — ${PRODUCTS.year.stars}⭐`,
-      'year',
-    ).row()
-    .text(`🎁 Всё включено — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
-    .text('📚 Мои разборы', 'my').row()
-    .text('✏️ Изменить дату', 'date');
-  return kb;
-}
-
+// Меню = выбор из тех же 7 тем, что в начале игры
 function sphereMenu(user) {
   const kb = new InlineKeyboard();
   for (const key of SPHERE_KEYS) {
@@ -70,27 +56,24 @@ function sphereMenu(user) {
     else mark = `${PRODUCTS.sphere.stars}⭐`;
     kb.text(`${s.emoji} ${s.name} · ${mark}`, `sp:${key}`).row();
   }
-  return kb.text('« Меню', 'menu');
+  return kb
+    .text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
+    .text('📚 Мои разборы', 'my');
 }
 
 const afterReadingKb = () =>
   new InlineKeyboard()
-    .text('🔮 Другие темы', 'spheres').row()
-    .text('💞 Совместимость', 'compat')
-    .text('📅 Прогноз на год', 'year').row()
-    .text(`🎁 Всё включено — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
-    .text('≡ Меню', 'menu');
+    .text('🔮 Выбрать другую тему', 'spheres').row()
+    .text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack');
 
-async function showMenu(ctx, text = UI.menu) {
+async function showMenu(ctx, text = UI.chooseSphere) {
   const user = db.getUser(ctx.from.id);
   if (!user?.birth) return askBirth(ctx);
-  await ctx.reply(text, { ...HTML, reply_markup: mainMenu(user) });
+  await ctx.reply(text, { ...HTML, reply_markup: sphereMenu(user) });
 }
 
-async function askBirth(ctx) {
-  db.setState(ctx.from.id, 'await_birth');
-  await ctx.reply(UI.askDate, HTML);
-}
+// Даты ещё нет — человек идёт в игру, там он её и введёт
+const askBirth = (ctx) => sendIntro(ctx);
 
 // ---------- отправка разборов сериями сообщений ----------
 
@@ -201,7 +184,7 @@ async function offerPayment(ctx, product, param) {
   const order = db.createOrder(ctx.from.id, product, param, p.stars, p.usd);
   const kb = new InlineKeyboard().text(`⭐ Оплатить ${p.stars} Stars`, `pay:s:${order.id}`).row();
   if (cp.cryptoEnabled()) kb.text(`💎 Криптой через CryptoBot · $${p.usd}`, `pay:c:${order.id}`).row();
-  kb.text('« Меню', 'menu');
+  kb.text('« Все темы', 'spheres');
   await ctx.reply(
     UI.payChoose(productTitle(order), p.stars, cp.cryptoEnabled() ? p.usd : null) + `\n\n<i>${p.description}</i>`,
     { ...HTML, reply_markup: kb },
@@ -399,7 +382,6 @@ async function cryptoPollTick() {
 bot.command('start', (ctx) => sendIntro(ctx));
 
 bot.command('menu', (ctx) => showMenu(ctx));
-bot.command('date', (ctx) => askBirth(ctx));
 bot.command('help', (ctx) => ctx.reply(UI.help));
 bot.command('terms', (ctx) => ctx.reply(UI.terms));
 bot.command('paysupport', (ctx) => ctx.reply(UI.paySupport(SUPPORT_CONTACT)));
@@ -438,11 +420,6 @@ bot.command('stats', async (ctx) => {
 bot.callbackQuery('menu', async (ctx) => {
   await ctx.answerCallbackQuery();
   await showMenu(ctx);
-});
-
-bot.callbackQuery('date', async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await askBirth(ctx);
 });
 
 bot.callbackQuery('spheres', async (ctx) => {
@@ -524,7 +501,7 @@ bot.callbackQuery('my', async (ctx) => {
     if (kind === 'compat') kb.text(`💞 Совместимость с ${formatDate(fromIso(param))}`, `cp:${param}`).row();
   }
   if (user.compat_credits) kb.text(`💞 Новая совместимость (доступно ${user.compat_credits})`, 'compat').row();
-  kb.text('« Меню', 'menu');
+  kb.text('« Все темы', 'spheres');
   await ctx.reply('📚 <b>Мои разборы</b>\nНажмите, чтобы открыть снова:', { ...HTML, reply_markup: kb });
 });
 

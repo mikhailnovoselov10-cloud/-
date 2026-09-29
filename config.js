@@ -102,8 +102,8 @@ export const PRODUCTS = {
   sphere: {
     title: 'Разбор темы',
     description: 'Подробный разбор выбранной темы по дате рождения',
-    stars: 99,
-    usd: '1.49',
+    stars: 189,
+    usd: '2.49',
   },
   compat: {
     title: 'Совместимость',
