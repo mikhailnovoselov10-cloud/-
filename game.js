@@ -16,7 +16,8 @@ import { fromIso, matrixCodes, personalYear } from './numerology.js';
 import { SHADOW, LINE } from './game_shadow.js';
 import { POTENTIAL } from './game_potential.js';
 import { REQUESTS, REQUEST_KEYS, YEAR_BREAK, G } from './game_texts.js';
-import { UI } from './texts.js';
+import { UI, YEARS } from './texts.js';
+import { ARCANA, TOPIC_DATA, TOPIC_META, TOPIC_YEAR, topicCode } from './topic_meta.js';
 
 const HTML = { parse_mode: 'HTML' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -175,16 +176,105 @@ function codesOf(user) {
 }
 
 // Анимация «Поиск… ▓▓▓░ 87%» — одно сообщение, которое обновляется
-async function analysis(chatId) {
+async function analysis(chatId, labels = G.progress) {
   const bar = (p) => '█'.repeat(Math.round(p / 10)) + '░'.repeat(10 - Math.round(p / 10));
   const frames = [[0, 12], [1, 37], [1, 64], [2, 87], [3, 100]];
   const first = frames[0];
-  const msg = await bot.api.sendMessage(chatId, `${G.progress[first[0]]}…\n${bar(first[1])} ${first[1]}%`);
+  const msg = await bot.api.sendMessage(chatId, `${labels[first[0]]}…\n${bar(first[1])} ${first[1]}%`);
   for (const [i, p] of frames.slice(1)) {
     await sleep(900);
-    await bot.api.editMessageText(chatId, msg.message_id, `${G.progress[i]}…\n${bar(p)} ${p}%`).catch(() => {});
+    await bot.api.editMessageText(chatId, msg.message_id, `${labels[i]}…\n${bar(p)} ${p}%`).catch(() => {});
   }
   await sleep(600);
+}
+
+// ---------- разбор темы в формате игры ----------
+
+const TOPIC_PROGRESS = ['Расшифровка кода темы', 'Поиск повторяющегося сценария', 'Анализ точки роста', 'Готово'];
+
+// Прогноз темы: с сентября — на следующий год, до сентября — на текущий
+function forecastYear() {
+  const d = new Date();
+  return d.getFullYear() + (d.getMonth() >= 8 ? 1 : 0);
+}
+
+function topicStep(key, n, user, name) {
+  const t = SPHERES[key];
+  const meta = TOPIC_META[key];
+  const birth = fromIso(user.birth);
+  const code = topicCode(key, birth);
+  const [power, flow, leak, s1, s2, s3] = TOPIC_DATA[key][code];
+  const next = (label) => new InlineKeyboard().text(label, `t:${key}:${n + 1}`);
+  switch (n) {
+    case 1:
+      return {
+        media: `topic_${key}`,
+        text:
+          `${t.emoji} <b>РАЗБОР ТЕМЫ «${t.name.toUpperCase()}»</b>\n\n${name ? name + ', м' : 'М'}ы расшифровали твой код в этой теме.\n\n${meta.intro}\n\n` +
+          `🔢 <b>Твой код в теме: ${code}</b>\n<b>Аркан: ${ARCANA[code]}</b>\n\n👇👇👇 нажми ниже, чтобы открыть расшифровку 👇👇👇`,
+        kb: next('🔎 Открыть расшифровку'),
+      };
+    case 2:
+      return {
+        media: 'topic2',
+        text:
+          `💎 <b>ТВОЯ СИЛА В ТЕМЕ «${t.name.toUpperCase()}»</b>\n\n${power}\n\n<b>Ты особенно раскрываешься там, где можно:</b>\n` +
+          POTENTIAL[code].spheres.map((s) => `✨ ${s}`).join('\n'),
+        kb: next('➡️ Дальше'),
+      };
+    case 3:
+      return {
+        media: 'topic3',
+        text:
+          `🔄 <b>ТВОЙ СЦЕНАРИЙ</b>\n\nКлассический круг для кода ${code}:\n\n<b>${flow}.</b>\n\n` +
+          `Внутри в этот момент звучит:\n${SHADOW[code].quotes.join('\n')}\n\n🕳 <b>${meta.leakTitle}</b>\n${leak}`,
+        kb: next('➡️ Как выйти из круга'),
+      };
+    case 4:
+      return {
+        media: 'topic4',
+        text:
+          `🎯 <b>ТВОЯ ТОЧКА РОСТА:</b>\n<b>${POTENTIAL[code].growth}</b>\n\n👣 <b>3 ШАГА НА БЛИЖАЙШИЙ МЕСЯЦ</b>\n\n1. ${s1}\n\n2. ${s2}\n\n3. ${s3}\n\n` +
+          'Не нужно менять всё сразу. Один шаг в неделю — и через месяц ты уже в другой точке.',
+        kb: next(`📅 Что ждёт в ${forecastYear()}`),
+      };
+    default: {
+      const year = forecastYear();
+      const py = personalYear(birth, year);
+      return {
+        media: 'topic5',
+        text:
+          `📅 <b>«${t.name.toUpperCase()}» В ${year} ГОДУ</b>\n\nТвой личный год — <b>${py}</b>, ${YEARS[py].title}.\n\n${TOPIC_YEAR[key][py]}\n\n` +
+          `✅ <b>Тема «${t.name}» открыта</b>\nВернуться к ней можно в любой момент — она всегда отмечена ✅ в списке тем.`,
+        kb: new InlineKeyboard()
+          .text('🔮 Выбрать другую тему', 'spheres').row()
+          .text(`🎁 Все 7 тем сразу — ${PRODUCTS.pack.stars}⭐`, 'pack').row()
+          .text('👥 Пригласи друга — тема бесплатно', 'ref'),
+      };
+    }
+  }
+}
+
+async function sendTopicStep(chatId, key, n, name) {
+  const user = db.getUser(chatId);
+  const s = topicStep(key, n, user, name);
+  await step(chatId, s.media, s.text, s.kb);
+}
+
+// Открыть купленную/подаренную тему (из main.js). false — если пользователю уже что-то показывается
+export async function openTopic(chatId, key, name) {
+  if (inFlight.has(chatId)) return false;
+  inFlight.add(chatId);
+  try {
+    await analysis(chatId, TOPIC_PROGRESS);
+    await sendTopicStep(chatId, key, 1, name);
+  } catch (e) {
+    if (e instanceof GrammyError && e.error_code === 403) db.setBlocked(chatId);
+    else console.error('topic', e);
+  } finally {
+    inFlight.delete(chatId);
+  }
+  return true;
 }
 
 async function showLevel1(chatId) {
@@ -462,6 +552,14 @@ export function startScheduler() {
 }
 
 function setupDripHandlers() {
+  // Шаги разбора темы: открыть можно только тему, которая есть у пользователя
+  bot.callbackQuery(/^t:(\w+):([2-5])$/, (ctx) => run(ctx, async () => {
+    const [, key, n] = ctx.match;
+    if (!SPHERES[key] || !db.hasItem(ctx.from.id, `sphere:${key}`)) return;
+    await dropKb(ctx);
+    await sendTopicStep(ctx.from.id, key, Number(n), escName(ctx.from.first_name));
+  }));
+
   // Продолжить игру с места, где остановился
   bot.callbackQuery('g:resume', (ctx) => run(ctx, async () => {
     const user = db.getUser(ctx.from.id);
@@ -501,4 +599,5 @@ function setupDripHandlers() {
 }
 
 // Для тестов
+export const _topicStep = topicStep;
 export const _texts = { level2, levelLine, level5intro, level5more, level6, level7, level8 };

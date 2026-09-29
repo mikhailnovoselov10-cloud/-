@@ -12,7 +12,7 @@ import * as cp from './cryptopay.js';
 import { parseDate, toIso, fromIso, formatDate, lifePath } from './numerology.js';
 import { sphereReading, yearReading, compatReading } from './reading.js';
 import { NUMBERS, UI } from './texts.js';
-import { setupGame, afterBirth, sendIntro, startScheduler, previewDrip } from './game.js';
+import { setupGame, afterBirth, sendIntro, startScheduler, previewDrip, openTopic } from './game.js';
 
 if (!BOT_TOKEN) {
   console.error('Не задан BOT_TOKEN (см. .env.example)');
@@ -113,7 +113,18 @@ function deliverItem(userId, item, pause = PAID_PAUSE_MS) {
   const user = db.getUser(userId);
   const birth = fromIso(user.birth);
   const [kind, param] = item.split(':');
-  if (kind === 'sphere') return sendSeries(userId, sphereReading(birth, param, nowTz().year), pause);
+  if (kind === 'sphere') {
+    // Разбор темы в формате игры (game.js). Если пользователю сейчас что-то показывается —
+    // тема уже открыта, даём кнопку, чтобы начать чуть позже
+    openTopic(userId, param, esc(user.first_name)).then((started) => {
+      if (!started) {
+        bot.api.sendMessage(userId, `✅ Тема «${SPHERES[param].name}» открыта`, {
+          reply_markup: new InlineKeyboard().text(`${SPHERES[param].emoji} Начать разбор`, `sp:${param}`),
+        }).catch(() => {});
+      }
+    });
+    return true;
+  }
   if (kind === 'year') return sendSeries(userId, yearReading(birth, Number(param)), pause);
   if (kind === 'compat') return sendSeries(userId, compatReading(birth, fromIso(param)), pause);
   return false;
@@ -123,13 +134,11 @@ function deliverItem(userId, item, pause = PAID_PAUSE_MS) {
 async function deliverOrder(order) {
   const uid = order.user_id;
   if (order.product === 'pack') {
-    const credits = db.getUser(uid).compat_credits;
     await bot.api.sendMessage(
       uid,
-      `🎁 <b>Пакет «Всё включено» активирован!</b>\n\n✅ Все 7 тем открыты\n✅ Прогноз на ${order.param} год\n✅ Совместимость: доступно ${credits}\n\nНачнём с прогноза на год 👇`,
-      HTML,
+      '🎁 <b>Все 7 тем открыты!</b>\n\nКаждая тема — отдельный разбор по твоей дате рождения: код, сила, сценарий, точка роста, 3 шага и прогноз.\n\nВыбери, с какой начать 👇',
+      { ...HTML, reply_markup: sphereMenu(db.getUser(uid)) },
     );
-    deliverItem(uid, `year:${order.param}`);
   } else {
     deliverItem(uid, `${order.product}:${order.param}`);
   }
