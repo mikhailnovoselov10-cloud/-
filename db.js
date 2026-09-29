@@ -88,6 +88,8 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_users_referrer ON users(referrer_id)');
 
 const now = () => Date.now();
 
+export const _raw = db; // для тестов
+
 function tx(fn) {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -182,8 +184,30 @@ export const setGameLevel = (id, level) => qGameLevel.run(level, id);
 const qGameRequest = db.prepare('UPDATE users SET game_request = ? WHERE id = ?');
 export const setGameRequest = (id, req) => qGameRequest.run(req, id);
 
-const qGameReset = db.prepare('UPDATE users SET game_level = 0, game_request = NULL WHERE id = ?');
+const qGameReset = db.prepare('UPDATE users SET game_level = 0, game_request = NULL, drip_step = 0, nudge_step = 0 WHERE id = ?');
 export const resetGame = (id) => qGameReset.run(id);
+
+// Шаг игры сделан: запоминаем время (для напоминаний) и сбрасываем счётчик напоминаний
+const qTouchGame = db.prepare('UPDATE users SET game_at = ?, nudge_step = 0 WHERE id = ?');
+export const touchGame = (id) => qTouchGame.run(now(), id);
+
+// Игра пройдена: цепочка прогрева стартует с этого момента
+const qStartDrip = db.prepare('UPDATE users SET game_at = ?, drip_step = 0 WHERE id = ?');
+export const startDrip = (id) => qStartDrip.run(now(), id);
+
+// Кандидаты на напоминание / сообщение цепочки (время проверяется в коде)
+export const nudgeCandidates = (maxStep) => db.prepare(
+  'SELECT id, first_name, game_level, game_at, nudge_step FROM users WHERE blocked = 0 AND game_level BETWEEN 1 AND 8 AND nudge_step < ? AND game_at IS NOT NULL',
+).all(maxStep);
+export const dripCandidates = (maxStep) => db.prepare(
+  'SELECT * FROM users WHERE blocked = 0 AND game_level = 9 AND drip_step < ? AND game_at IS NOT NULL',
+).all(maxStep);
+export const setNudgeStep = (id, step) => db.prepare('UPDATE users SET nudge_step = ? WHERE id = ?').run(step, id);
+export const setDripStep = (id, step) => db.prepare('UPDATE users SET drip_step = ? WHERE id = ?').run(step, id);
+
+// Была ли у пользователя хоть одна оплата (тогда прогрев не нужен)
+const qHasPaid = db.prepare(`SELECT 1 FROM payments WHERE user_id = ? AND status = 'ok' LIMIT 1`);
+export const hasPaid = (id) => !!qHasPaid.get(id);
 
 // Полный сброс прогресса пользователя (для тестов админа). Заказы и платежи остаются.
 export function resetUser(id) {

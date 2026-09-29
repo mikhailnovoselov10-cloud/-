@@ -10,7 +10,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { InlineKeyboard, InputFile, GrammyError } from 'grammy';
 import * as db from './db.js';
-import { PRODUCTS, SPHERES, SPHERE_KEYS, REQUEST_TO_SPHERE } from './config.js';
+import { PRODUCTS, SPHERES, SPHERE_KEYS, REQUEST_TO_SPHERE, TIMEZONE } from './config.js';
+import { DRIP, DRIP_OFFSETS, NUDGE, NUDGE_OFFSETS, CARDS, DOORS, rowSize } from './drip_texts.js';
 import { fromIso, matrixCodes, personalYear } from './numerology.js';
 import { SHADOW, LINE } from './game_shadow.js';
 import { POTENTIAL } from './game_potential.js';
@@ -42,9 +43,11 @@ let bot; // задаётся в setupGame
 
 async function sendMediaFile(chatId, m, extra = {}) {
   const src = fileIds.get(m.file) ?? new InputFile(m.file);
-  const method = { video: 'sendVideo', animation: 'sendAnimation', photo: 'sendPhoto', voice: 'sendVoice', audio: 'sendAudio' }[m.type];
+  const method = {
+    video: 'sendVideo', animation: 'sendAnimation', photo: 'sendPhoto', voice: 'sendVoice', audio: 'sendAudio', video_note: 'sendVideoNote',
+  }[m.type];
   const msg = await bot.api[method](chatId, src, extra);
-  const obj = msg.video ?? msg.animation ?? msg.voice ?? msg.audio ?? (msg.photo && msg.photo[msg.photo.length - 1]);
+  const obj = msg.video ?? msg.animation ?? msg.voice ?? msg.audio ?? msg.video_note ?? (msg.photo && msg.photo[msg.photo.length - 1]);
   if (obj?.file_id) fileIds.set(m.file, obj.file_id);
   return msg;
 }
@@ -53,6 +56,13 @@ async function sendMediaFile(chatId, m, extra = {}) {
 // (или отдельно, если текст длиннее лимита подписи Telegram).
 async function step(chatId, key, text, kb) {
   const extra = { ...HTML, ...(kb ? { reply_markup: kb } : {}) };
+  // Видео-кружки перед сообщением: media/<шаг>_circle.mp4, <шаг>_circle1.mp4 … _circle6.mp4
+  if (key) {
+    for (const suffix of ['_circle', '_circle1', '_circle2', '_circle3', '_circle4', '_circle5', '_circle6']) {
+      const c = findMedia(key + suffix, [['mp4', 'video_note']]);
+      if (c) await sendMediaFile(chatId, c).catch((e) => console.error('circle', key, e.message));
+    }
+  }
   const m = key && findMedia(key);
   if (m) {
     try {
@@ -179,6 +189,7 @@ async function analysis(chatId) {
 
 async function showLevel1(chatId) {
   db.setGameLevel(chatId, 1);
+  db.touchGame(chatId);
   const kb = new InlineKeyboard();
   for (const k of REQUEST_KEYS) kb.text(REQUESTS[k].label, `g:req:${k}`).row();
   await step(chatId, 'level1', G.level1, kb);
@@ -191,6 +202,7 @@ async function showLevel(chatId, n, name) {
   const c = codesOf(user);
   const next = (label) => new InlineKeyboard().text(label, `g:lvl:${n + 1}`);
   const firstTime = user.game_level < n;
+  db.touchGame(chatId);
   if (firstTime) {
     db.setGameLevel(chatId, n);
     if (n >= 3) await bot.api.sendMessage(chatId, G.key(n - 1), HTML);
@@ -285,6 +297,7 @@ const escName = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;',
 
 export function setupGame(b) {
   bot = b;
+  setupDripHandlers();
 
   // Начать игру: всегда просим ввести дату рождения
   bot.callbackQuery('g:start', (ctx) => run(ctx, async () => {
@@ -301,6 +314,7 @@ export function setupGame(b) {
     const firstTime = !user.game_request;
     await dropKb(ctx);
     db.setGameRequest(user.id, key);
+    db.touchGame(user.id);
     if (firstTime) await bot.api.sendMessage(user.id, G.key(1), HTML);
     await step(user.id, 'route', G.route(escName(ctx.from.first_name), REQUESTS[key].name),
       new InlineKeyboard().text('➡️ Перейти на следующий уровень', 'g:lvl:2'));
@@ -311,6 +325,7 @@ export function setupGame(b) {
     const user = db.getUser(ctx.from.id);
     if (!user.birth || !user.game_request || user.game_level < 9) return;
     await dropKb(ctx);
+    db.startDrip(user.id); // цепочка прогрева считается от окончания игры
     await showOffer(user.id, escName(ctx.from.first_name));
     // Друг прошёл игру по приглашению → пригласившему тема бесплатно (один раз)
     const referrer = db.rewardReferral(user.id);
@@ -336,6 +351,7 @@ export function setupGame(b) {
     const user = db.getUser(ctx.from.id);
     if (!user.birth || user.game_level < 5) return;
     await dropKb(ctx);
+    db.touchGame(user.id);
     await step(user.id, 'level5_more', level5more(codesOf(user).potential));
     const voice = findMedia('level5_voice', [['ogg', 'voice'], ['oga', 'voice'], ['mp3', 'audio'], ['m4a', 'audio']]);
     const kb = new InlineKeyboard().text('➡️ Перейти на следующий уровень', 'g:lvl:6');
@@ -345,6 +361,142 @@ export function setupGame(b) {
     } else {
       await bot.api.sendMessage(user.id, G.nextNote(5), { ...HTML, reply_markup: kb });
     }
+  }));
+}
+
+// ---------- прогрев после игры и напоминания ----------
+
+function dripContext(user) {
+  const reqKey = REQUEST_TO_SPHERE[user.game_request] ?? 'purpose';
+  const birth = fromIso(user.birth);
+  const shadowCode = matrixCodes(birth).shadow;
+  return {
+    name: escName(user.first_name),
+    reqKey,
+    reqName: SPHERES[reqKey].name,
+    giftKey: reqKey,
+    giftName: SPHERES[reqKey].name,
+    giftUsed: !!user.free_sphere,
+    shadowCode,
+    shadowName: SHADOW[shadowCode].name,
+    birthDay: birth.d,
+    topicPrice: PRODUCTS.sphere.stars,
+    packPrice: PRODUCTS.pack.stars,
+  };
+}
+
+function buttonsKb(buttons, perRow = 1) {
+  const kb = new InlineKeyboard();
+  buttons.forEach(([label, data], i) => {
+    if (/^https?:/.test(data)) kb.url(label, data); else kb.text(label, data);
+    if ((i + 1) % perRow === 0) kb.row();
+  });
+  return kb;
+}
+
+// Час в часовом поясе бота: ночью (22–9) не беспокоим
+function localHour() {
+  return Number(new Intl.DateTimeFormat('en-GB', { timeZone: TIMEZONE, hour: '2-digit', hourCycle: 'h23' }).format(new Date()));
+}
+
+let schedulerBusy = false;
+export async function schedulerTick(force = false) {
+  if (schedulerBusy) return;
+  const h = localHour();
+  if (!force && (h < 9 || h >= 22)) return;
+  schedulerBusy = true;
+  const now = Date.now();
+  try {
+    // 1) Бросили игру на середине: «твой ключ ждёт»
+    for (const u of db.nudgeCandidates(NUDGE.length)) {
+      if (now - u.game_at < NUDGE_OFFSETS[u.nudge_step]) continue;
+      if (inFlight.has(u.id)) continue;
+      db.setNudgeStep(u.id, u.nudge_step + 1);
+      await bot.api.sendMessage(u.id, NUDGE[u.nudge_step](escName(u.first_name), u.game_level), {
+        ...HTML, reply_markup: new InlineKeyboard().text('🎲 Продолжить игру', 'g:resume'),
+      }).catch((e) => { if (e instanceof GrammyError && e.error_code === 403) db.setBlocked(u.id); });
+      await sleep(60);
+    }
+    // 2) Прошли игру, но ничего не купили: цепочка прогрева
+    for (const u of db.dripCandidates(DRIP.length)) {
+      if (now - u.game_at < DRIP_OFFSETS[u.drip_step]) continue;
+      if (db.hasPaid(u.id)) { db.setDripStep(u.id, DRIP.length); continue; } // уже покупатель — не дожимаем
+      // Если несколько шагов уже просрочены (ночь, бот был выключен) — шлём только самый свежий,
+      // чтобы не засыпать человека сообщениями подряд
+      let s = u.drip_step;
+      while (s + 1 < DRIP.length && now - u.game_at >= DRIP_OFFSETS[s + 1]) s++;
+      db.setDripStep(u.id, s + 1);
+      const m = DRIP[s](dripContext(u));
+      try {
+        await step(u.id, m.key, m.text, buttonsKb(m.buttons, rowSize(s)));
+      } catch (e) {
+        if (e instanceof GrammyError && e.error_code === 403) db.setBlocked(u.id);
+        else console.error('drip', u.id, e.message);
+      }
+      await sleep(60);
+    }
+  } finally {
+    schedulerBusy = false;
+  }
+}
+
+// Все сообщения цепочки и напоминаний подряд — для просмотра админом
+export async function previewDrip(chatId) {
+  const user = db.getUser(chatId);
+  const c = dripContext(user);
+  for (let i = 0; i < NUDGE.length; i++) {
+    await bot.api.sendMessage(chatId, `<i>— напоминание ${i + 1} (бросил игру) —</i>\n\n` + NUDGE[i](c.name, 4), {
+      ...HTML, reply_markup: new InlineKeyboard().text('🎲 Продолжить игру', 'g:resume'),
+    });
+  }
+  for (let i = 0; i < DRIP.length; i++) {
+    const m = DRIP[i](c);
+    await bot.api.sendMessage(chatId, `<i>— прогрев ${i + 1} из ${DRIP.length}, через ${Math.round(DRIP_OFFSETS[i] / 36e5 * 10) / 10} ч после игры —</i>`, HTML);
+    await step(chatId, m.key, m.text, buttonsKb(m.buttons, rowSize(i)));
+    await sleep(300);
+  }
+}
+
+export function startScheduler() {
+  setInterval(() => schedulerTick().catch((e) => console.error('scheduler', e)), 60_000);
+}
+
+function setupDripHandlers() {
+  // Продолжить игру с места, где остановился
+  bot.callbackQuery('g:resume', (ctx) => run(ctx, async () => {
+    const user = db.getUser(ctx.from.id);
+    await dropKb(ctx);
+    if (!user?.birth || !user.game_level) return sendIntro(ctx);
+    if (user.game_level >= 9) return showLevel(user.id, 9, escName(ctx.from.first_name));
+    if (!user.game_request || user.game_level === 1) return showLevel1(user.id);
+    return showLevel(user.id, user.game_level, escName(ctx.from.first_name));
+  }));
+
+  // Карта дня: любая из трёх кнопок открывает случайную карту
+  bot.callbackQuery(/^d:card:[1-3]$/, (ctx) => run(ctx, async () => {
+    const user = db.getUser(ctx.from.id);
+    if (!user?.birth) return;
+    await dropKb(ctx);
+    const i = Math.floor(Math.random() * CARDS.length);
+    const card = CARDS[i];
+    const c = dripContext(user);
+    await step(user.id, `card${i + 1}`,
+      `✨ <b>Карта дня: ${card.name}</b>\n\n${card.text}\n\n📝 <b>Задание на сегодня:</b>\n${card.task}\n\n` +
+      `${c.name ? c.name + ', к' : 'К'}арта на сегодня получена ✓\nСохрани её и выполни задание до вечера.\n\n` +
+      `А полную картину — что именно делать в теме <b>«${c.reqName}»</b> — показывает разбор твоей темы 👇`,
+      new InlineKeyboard().text(`🔮 Разбор «${c.reqName}»`, `sp:${c.reqKey}`));
+  }));
+
+  // Тест «Выбери дверь»
+  bot.callbackQuery(/^d:door:([1-6])$/, (ctx) => run(ctx, async () => {
+    const user = db.getUser(ctx.from.id);
+    if (!user?.birth) return;
+    await dropKb(ctx);
+    const d = DOORS[Number(ctx.match[1]) - 1];
+    const t = SPHERES[d.topic];
+    await step(user.id, `door${ctx.match[1]}`,
+      `🚪 <b>Дверь ${ctx.match[1]}</b>\n\n${d.text}\n\nИменно здесь сейчас твоя главная точка роста. Разбор темы <b>«${t.name}»</b> покажет твой код в этой сфере, сценарий, который мешает, и первые 3 шага 👇`,
+      new InlineKeyboard().text(`${t.emoji} Разбор «${t.name}»`, `sp:${d.topic}`).row().text('🔮 Все темы', 'spheres'));
   }));
 }
 

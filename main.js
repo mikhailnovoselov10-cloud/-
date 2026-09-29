@@ -12,7 +12,7 @@ import * as cp from './cryptopay.js';
 import { parseDate, toIso, fromIso, formatDate, lifePath } from './numerology.js';
 import { sphereReading, yearReading, compatReading } from './reading.js';
 import { NUMBERS, UI } from './texts.js';
-import { setupGame, afterBirth, sendIntro } from './game.js';
+import { setupGame, afterBirth, sendIntro, startScheduler, previewDrip } from './game.js';
 
 if (!BOT_TOKEN) {
   console.error('Не задан BOT_TOKEN (см. .env.example)');
@@ -389,6 +389,14 @@ bot.command('help', (ctx) => ctx.reply(UI.help));
 bot.command('terms', (ctx) => ctx.reply(UI.terms));
 bot.command('paysupport', (ctx) => ctx.reply(UI.paySupport(SUPPORT_CONTACT)));
 
+// Для админа: прислать себе все сообщения прогрева и напоминания, чтобы посмотреть, как они выглядят
+bot.command('preview', async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) return;
+  const user = db.getUser(ctx.from.id);
+  if (!user.birth || !user.game_request) return ctx.reply('Сначала пройди игру хотя бы до выбора темы (/start).');
+  await previewDrip(ctx.from.id);
+});
+
 // Для админа: сбросить свой прогресс (игра, подарок, открытые разборы), чтобы пройти всё заново.
 // Заказы и платежи не удаляются.
 bot.command('reset', async (ctx) => {
@@ -592,6 +600,8 @@ async function main() {
   } else {
     console.log('CRYPTOPAY_TOKEN не задан — доступна только оплата Stars');
   }
+
+  startScheduler(); // напоминания бросившим игру и прогрев после игры
 
   // Без списка команд: у пользователя нет кнопки «Меню», он идёт по сюжету игры.
   // Команды (/menu, /paysupport, /stats, /reset…) продолжают работать, если их написать.
