@@ -1,0 +1,1033 @@
+<title>Журнал закупок</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: app shell — sticky top bar, one content column (max 760px), bottom tab bar; sheets slide up from the bottom. */
+:root{
+  --bg:#eceff4; --surface:#ffffff; --surface-2:#f4f6fa; --line:#dde2eb;
+  --ink:#131a26; --ink-2:#56607a; --ink-3:#8b93a8;
+  --accent:#0b7a5c; --accent-ink:#ffffff; --accent-soft:#d8f1e8;
+  --due:#b45309; --due-soft:#fdecd4;
+  --bad:#c0362c; --bad-soft:#fbe0dd;
+  --info:#2f55c7; --info-soft:#dfe7fb;
+  --shadow:0 1px 2px rgba(19,26,38,.06),0 8px 24px rgba(19,26,38,.06);
+  --ledger-bg:#131a26; --ledger-fg:#eef2f8; --ledger-due:#f5b44a;
+  --scrim:rgba(12,16,24,.45);
+  --f-display:"Unbounded","Manrope",system-ui,sans-serif;
+  --f-body:"Manrope",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --r:14px;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0c1016; --surface:#151b24; --surface-2:#1b2330; --line:#263042;
+  --ink:#e9eef6; --ink-2:#a3adc2; --ink-3:#6d778c;
+  --accent:#3fd3a2; --accent-ink:#06261c; --accent-soft:#123a2f;
+  --due:#f5b44a; --due-soft:#3a2a10;
+  --bad:#ff7a6e; --bad-soft:#3d1a17;
+  --info:#8aa8ff; --info-soft:#1c2747;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);
+  --scrim:rgba(0,0,0,.6); --ledger-bg:#1d2736; --ledger-fg:#eef2f8; --ledger-due:#f5b44a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0c1016; --surface:#151b24; --surface-2:#1b2330; --line:#263042;
+  --ink:#e9eef6; --ink-2:#a3adc2; --ink-3:#6d778c;
+  --accent:#3fd3a2; --accent-ink:#06261c; --accent-soft:#123a2f;
+  --due:#f5b44a; --due-soft:#3a2a10;
+  --bad:#ff7a6e; --bad-soft:#3d1a17;
+  --info:#8aa8ff; --info-soft:#1c2747;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 8px 24px rgba(0,0,0,.25);
+  --scrim:rgba(0,0,0,.6); --ledger-bg:#1d2736; --ledger-fg:#eef2f8; --ledger-due:#f5b44a; color-scheme:dark}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-bottom:96px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.num,.money{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--f-mono);font-size:.86em;letter-spacing:-.01em}
+h1,h2,h3{text-wrap:balance;margin:0}
+
+.wrap{max-width:760px;margin:0 auto}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:14px 10px;display:flex;align-items:center;gap:12px}
+.brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.brand-mark{width:34px;height:34px;border-radius:10px;background:var(--ink);color:var(--bg);display:grid;place-items:center;font-family:var(--f-display);font-weight:700;font-size:13px;flex:none}
+.brand-name{font-family:var(--f-display);font-weight:700;font-size:17px;letter-spacing:-.01em}
+.brand-sub{font-size:12px;color:var(--ink-3)}
+.sync{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:99px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.sync.cloud{background:var(--accent-soft);color:var(--accent)}
+.icon-btn{width:38px;height:38px;border-radius:11px;border:1px solid var(--line);background:var(--surface);display:grid;place-items:center;flex:none}
+.icon-btn svg{width:18px;height:18px}
+
+/* Ledger summary */
+.ledger{background:var(--ledger-bg);color:var(--ledger-fg);border:1px solid var(--line);border-radius:20px;padding:20px;display:grid;gap:16px;margin-top:4px}
+.ledger-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;opacity:.65;font-weight:700}
+.ledger-big{font-family:var(--f-display);font-size:clamp(26px,7vw,36px);font-weight:700;letter-spacing:-.02em;line-height:1.1}
+.ledger-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;border-top:1px dashed color-mix(in srgb,var(--ledger-fg) 30%,transparent);padding-top:14px}
+.ledger-row b{display:block;font-size:17px;font-weight:800}
+.ledger-row span{font-size:12px;opacity:.65}
+.ledger .due-text{color:var(--ledger-due)}
+
+.section{margin-top:26px;display:grid;gap:10px}
+.section-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.section-head h2{font-family:var(--f-display);font-size:15px;font-weight:700;letter-spacing:-.01em}
+.section-head .link{font-size:13px;color:var(--accent);font-weight:700;background:none;border:0;padding:0}
+.page-title{font-family:var(--f-display);font-size:22px;font-weight:700;letter-spacing:-.02em;margin-top:6px}
+
+.list{display:grid;gap:8px}
+.row{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;display:flex;align-items:center;gap:12px;text-align:left;width:100%}
+button.row:hover{border-color:var(--ink-3)}
+.row-main{flex:1;min-width:0}
+.row-title{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-sub{font-size:13px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row-end{text-align:right;flex:none}
+.row-end b{display:block;font-weight:800}
+.row-end small{font-size:12px;color:var(--ink-3)}
+.avatar{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-weight:800;font-size:15px;flex:none;color:#fff}
+.avatar.lg{width:56px;height:56px;border-radius:16px;font-size:20px}
+
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:3px 8px;border-radius:6px;white-space:nowrap}
+.chip.ok{background:var(--accent-soft);color:var(--accent)}
+.chip.due{background:var(--due-soft);color:var(--due)}
+.chip.bad{background:var(--bad-soft);color:var(--bad)}
+.chip.info{background:var(--info-soft);color:var(--info)}
+.chip.mute{background:var(--surface-2);color:var(--ink-2)}
+.stamp{border:1.5px solid currentColor;background:transparent;transform:rotate(-2deg)}
+
+.bar{height:6px;border-radius:99px;background:var(--surface-2);overflow:hidden;display:flex}
+.bar i{display:block;height:100%;background:var(--accent)}
+.bar i.over{background:var(--info)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px;display:grid;gap:12px}
+.hero{display:flex;gap:14px;align-items:center}
+.hero h1{font-family:var(--f-display);font-size:20px;font-weight:700;letter-spacing:-.02em;overflow-wrap:anywhere}
+.meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--ink-2)}
+.meta span{display:inline-flex;gap:5px;align-items:center}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.kpi{background:var(--surface-2);border-radius:12px;padding:10px 12px}
+.kpi span{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.kpi b{display:block;font-size:16px;font-weight:800;margin-top:2px}
+.kpi.due b{color:var(--due)}
+.kpi.ok b{color:var(--accent)}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
+
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:9px 14px;font-weight:700;font-size:14px;display:inline-flex;align-items:center;gap:6px}
+.btn svg{width:16px;height:16px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.danger{color:var(--bad)}
+.btn.ghost{background:transparent;border-color:transparent;padding-inline:8px}
+.btn.sm{padding:6px 10px;font-size:13px;border-radius:9px}
+
+/* Order ticket */
+.order{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.order-top{padding:14px;display:grid;gap:10px}
+.order-head{display:flex;gap:10px;align-items:flex-start}
+.order-head .row-main{min-width:0}
+.order-title{font-weight:800;overflow-wrap:anywhere}
+.order-sub{font-size:13px;color:var(--ink-2);overflow-wrap:anywhere}
+.art{font-family:var(--f-mono);font-size:12px;font-weight:700;background:var(--surface-2);border:1px solid var(--line);padding:2px 6px;border-radius:6px;white-space:nowrap}
+.sums{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px;color:var(--ink-2)}
+.sums b{color:var(--ink);font-weight:800}
+.sums .due b{color:var(--due)}
+.perf{border-top:1px dashed var(--line);position:relative}
+.perf::before,.perf::after{content:"";position:absolute;top:-9px;width:18px;height:18px;border-radius:50%;background:var(--bg);border:1px solid var(--line)}
+.perf::before{left:-10px}.perf::after{right:-10px}
+.pays{padding:10px 14px 14px;display:grid;gap:6px}
+.pay{display:flex;align-items:center;gap:10px;font-size:13px;background:none;border:0;padding:4px 0;text-align:left;width:100%}
+.pay-main{flex:1;min-width:0}
+.pay-main div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pay-main small{color:var(--ink-3)}
+.pay b{font-weight:800;flex:none;white-space:nowrap}
+.pay .chip{flex:none}
+.thumbs{display:flex;gap:4px}
+.thumb{width:30px;height:30px;border-radius:7px;object-fit:cover;background:var(--surface-2);border:1px solid var(--line)}
+.order-foot{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 14px}
+
+.group-title{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin-top:8px;display:flex;justify-content:space-between;gap:8px}
+
+.search{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:0 12px}
+.search input{flex:1;border:0;background:transparent;padding:11px 0;outline:none;min-width:0}
+.search svg{width:16px;height:16px;color:var(--ink-3);flex:none}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button{border:1px solid var(--line);background:var(--surface);border-radius:99px;padding:6px 12px;font-size:13px;font-weight:700;color:var(--ink-2)}
+.seg button[aria-pressed="true"]{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+
+.empty{border:1.5px dashed var(--line);border-radius:16px;padding:22px;text-align:center;color:var(--ink-2);display:grid;gap:10px;justify-items:center}
+.empty b{color:var(--ink);font-size:15px}
+.loading{padding:40px 0;text-align:center;color:var(--ink-3)}
+
+/* Bottom nav */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:6;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-top:1px solid var(--line);
+  padding:8px max(16px,env(safe-area-inset-right,0px)) calc(8px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+.nav-in{max-width:760px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr auto 1fr 1fr;align-items:center;gap:4px}
+.nav a{display:grid;justify-items:center;gap:2px;font-size:11px;font-weight:700;color:var(--ink-3);text-decoration:none;padding:4px 0;border-radius:10px}
+.nav a svg{width:20px;height:20px}
+.nav a[aria-current="page"]{color:var(--ink)}
+.fab{width:52px;height:52px;border-radius:16px;border:0;background:var(--accent);color:var(--accent-ink);display:grid;place-items:center;box-shadow:var(--shadow);margin-top:-22px}
+.fab svg{width:24px;height:24px}
+
+/* Sheet */
+.scrim{position:fixed;inset:0;background:var(--scrim);z-index:20;display:flex;align-items:flex-end;justify-content:center;animation:fade .15s}
+.sheet{background:var(--surface);width:100%;max-width:560px;max-height:92vh;max-height:92dvh;border-radius:22px 22px 0 0;display:flex;flex-direction:column;animation:up .22s cubic-bezier(.2,.8,.2,1);
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (min-width:640px){.scrim{align-items:center}.sheet{border-radius:22px}}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 18px 8px}
+.sheet-head h3{font-family:var(--f-display);font-size:17px;font-weight:700}
+.sheet-body{overflow-y:auto;padding:6px 18px 12px;display:grid;gap:12px}
+.sheet-foot{display:flex;gap:8px;padding:12px 18px 16px;border-top:1px solid var(--line)}
+.sheet-foot .btn{flex:1;justify-content:center;padding-block:12px}
+@keyframes up{from{transform:translateY(40px);opacity:.4}}
+@keyframes fade{from{opacity:0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important}}
+
+.field{display:grid;gap:5px}
+.field label{font-size:12px;font-weight:700;color:var(--ink-2);letter-spacing:.02em}
+.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);background:var(--surface-2);border-radius:11px;padding:11px 12px;outline:none;min-width:0}
+.field textarea{min-height:70px;resize:vertical}
+.field input:focus,.field select:focus,.field textarea:focus{border-color:var(--accent);background:var(--surface)}
+.field .hint{font-size:12px;color:var(--ink-3)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.fieldset{border:1px dashed var(--line);border-radius:14px;padding:12px;display:grid;gap:10px}
+.fieldset legend{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:0 6px}
+.quick{display:flex;gap:6px;flex-wrap:wrap}
+.quick button{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:4px 9px;font-size:12px;font-weight:700}
+.picker{display:flex;flex-wrap:wrap;gap:8px}
+.picker .ph{position:relative;width:76px;height:76px}
+.picker .ph img{width:100%;height:100%;object-fit:cover;border-radius:10px;border:1px solid var(--line)}
+.picker .ph button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;border:0;background:var(--ink);color:var(--bg);font-size:13px;line-height:1}
+.picker label.add{width:76px;height:76px;border:1.5px dashed var(--line);border-radius:10px;display:grid;place-items:center;text-align:center;font-size:11px;font-weight:700;color:var(--ink-2);cursor:pointer;padding:4px}
+.picker label.add svg{width:20px;height:20px;display:block;margin:0 auto 2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+/* Viewer */
+.viewer{position:fixed;inset:0;z-index:30;background:rgba(5,7,10,.94);display:flex;flex-direction:column;padding:calc(12px + env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
+.viewer-bar{display:flex;justify-content:space-between;align-items:center;gap:10px;color:#e9eef6;font-size:13px}
+.viewer-bar .btn{background:#1b2330;border-color:#263042;color:#e9eef6}
+.viewer-img{flex:1;display:grid;place-items:center;min-height:0;padding:10px 0}
+.viewer-img img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}
+
+.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:12px;font-weight:700;font-size:14px;z-index:40;box-shadow:var(--shadow);max-width:calc(100% - 32px);animation:fade .2s}
+.note{font-size:13px;color:var(--ink-2);background:var(--surface-2);border-radius:12px;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.copybox{width:100%;min-height:180px;font-family:var(--f-mono);font-size:12px;border:1px solid var(--line);background:var(--surface-2);border-radius:11px;padding:10px}
+@media (max-width:420px){.kpis,.ledger-row{grid-template-columns:1fr 1fr}.kpis .kpi:last-child,.ledger-row>div:last-child{grid-column:span 2}.grid3{grid-template-columns:1fr 1fr}}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="brand-mark">ЖЗ</div>
+      <div style="min-width:0">
+        <div class="brand-name">Журнал закупок</div>
+        <div class="brand-sub" id="subline">клиенты · оплаты · чеки</div>
+      </div>
+    </div>
+    <span class="sync" id="sync">загрузка</span>
+    <button class="icon-btn" data-act="menu" aria-label="Настройки и резервная копия">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+    </button>
+  </header>
+  <main id="view"><div class="loading">Загружаем журнал…</div></main>
+</div>
+
+<nav class="nav" aria-label="Разделы">
+  <div class="nav-in">
+    <a href="#home" data-nav="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Обзор</a>
+    <a href="#clients" data-nav="clients"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6"/><path d="M16 4a4 4 0 0 1 0 8M22 21c0-3-2-5-4-5.6"/></svg>Клиенты</a>
+    <button class="fab" data-act="quickAdd" aria-label="Добавить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+    <a href="#purchases" data-nav="purchases"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>Закупки</a>
+    <a href="#payments" data-nav="payments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 8h6M9 12h6"/></svg>Оплаты</a>
+  </div>
+</nav>
+<div id="layer"></div>
+
+<script>
+(() => {
+"use strict";
+
+/* ---------- helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
+const fmtDate = s => s ? s.split("-").reverse().join(".") : "";
+const num = v => { const n = parseFloat(String(v ?? "").replace(/\s/g, "").replace(",", ".")); return isFinite(n) ? n : 0; };
+const nf = new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 2 });
+const money = n => nf.format(Math.round(n * 100) / 100) + " " + (state.settings.currency || "₽");
+const plural = (n, a, b, c) => { n = Math.abs(n) % 100; const n1 = n % 10; return n > 10 && n < 20 ? c : n1 > 1 && n1 < 5 ? b : n1 === 1 ? a : c; };
+const hue = s => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+const avatar = (c, lg) => `<div class="avatar${lg ? " lg" : ""}" style="background:hsl(${hue(c.nick)} 55% 42%)">${esc((c.nick || "?").replace(/^@/, "").slice(0, 1).toUpperCase())}</div>`;
+const icon = {
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-3h6l2 3h3v13H4z"/><circle cx="12" cy="13" r="4"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
+};
+
+const PURCHASE_STATUS = {
+  open: ["Сбор заказов", "info"], ordered: ["Заказано на фабрике", "mute"], shipping: ["В пути", "due"],
+  arrived: ["Прибыла", "ok"], closed: ["Закрыта", "mute"],
+};
+const ORDER_STATUS = {
+  waiting: ["Ждёт товар", "mute"], arrived: ["Товар пришёл", "info"], issued: ["Выдан", "ok"], cancelled: ["Отменён", "bad"],
+};
+const PAY_KIND = { prepay: "Предоплата", final: "Доплата", refund: "Возврат" };
+const PAY_METHOD = ["Перевод на карту", "СБП", "Наличные", "Другое"];
+
+/* ---------- state ---------- */
+const COLLS = ["clients", "purchases", "orders", "payments"];
+const state = { clients: [], purchases: [], orders: [], payments: [], settings: { currency: "₽" }, ready: false };
+const ui = { clientQ: "", clientSort: "due", purchaseFilter: "active", payQ: "", onlyDue: false };
+
+/* ---------- storage: cloud (artifact db + assets) or local IndexedDB ---------- */
+const Store = {
+  mode: "local", db: null, assets: null, idb: null, urls: {},
+  async init() {
+    if (window.claude && typeof window.claude.use === "function") {
+      try {
+        const db = await window.claude.use("db");
+        if (db) { this.db = db; this.mode = "cloud"; this.assets = await window.claude.use("assets").catch(() => null); }
+      } catch (e) {}
+    }
+    if (this.mode === "cloud") this.subscribe();
+    else await this.localLoad();
+  },
+  subscribe() {
+    const pending = new Set([...COLLS, "settings"]);
+    const done = k => { pending.delete(k); if (!pending.size && !state.ready) { state.ready = true; render(); } };
+    for (const c of COLLS) {
+      this.db.collection("zk_" + c).onSnapshot(snap => {
+        state[c] = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+        done(c); if (state.ready) render();
+      }, err => { toast("Нет связи с хранилищем: " + err.code); done(c); });
+    }
+    this.db.doc("zk_meta/settings").onSnapshot(s => {
+      if (s.exists) state.settings = { ...state.settings, ...s.data() };
+      done("settings"); if (state.ready) render();
+    }, () => done("settings"));
+    setTimeout(() => { if (!state.ready) { state.ready = true; render(); } }, 8000);
+  },
+  idbOpen() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open("zhurnal-zakupok", 1);
+      r.onupgradeneeded = () => { r.result.createObjectStore("kv"); r.result.createObjectStore("photos"); };
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  },
+  idbReq(store, mode, fn) {
+    return new Promise((res, rej) => {
+      const t = this.idb.transaction(store, mode); const q = fn(t.objectStore(store));
+      t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error);
+    });
+  },
+  async localLoad() {
+    try {
+      this.idb = await this.idbOpen();
+      const saved = await this.idbReq("kv", "readonly", s => s.get("state"));
+      if (saved) for (const k of [...COLLS, "settings"]) if (saved[k]) state[k] = saved[k];
+      try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+    } catch (e) { toast("Хранилище браузера недоступно: данные не сохранятся"); }
+    state.ready = true; render();
+  },
+  localSave() {
+    clearTimeout(this._t);
+    this._t = setTimeout(() => {
+      if (!this.idb) return;
+      const snap = {}; for (const k of [...COLLS, "settings"]) snap[k] = state[k];
+      this.idbReq("kv", "readwrite", s => s.put(snap, "state")).catch(() => toast("Не удалось сохранить"));
+    }, 150);
+  },
+  async put(coll, obj) {
+    const list = state[coll]; const i = list.findIndex(x => x.id === obj.id);
+    if (i >= 0) list[i] = obj; else list.push(obj);
+    render();
+    if (this.mode === "cloud") {
+      const { id, ...body } = obj;
+      try { await this.db.collection("zk_" + coll).doc(id).set(JSON.parse(JSON.stringify(body))); }
+      catch (e) { toast(e.code === "quota_exceeded" ? "Хранилище заполнено" : "Не сохранилось, проверьте связь"); }
+    } else this.localSave();
+  },
+  async remove(coll, id) {
+    state[coll] = state[coll].filter(x => x.id !== id);
+    render();
+    if (this.mode === "cloud") { try { await this.db.collection("zk_" + coll).doc(id).delete(); } catch (e) { toast("Не удалось удалить"); } }
+    else this.localSave();
+  },
+  async saveSettings() {
+    render();
+    if (this.mode === "cloud") { try { await this.db.doc("zk_meta/settings").set({ ...state.settings }); } catch (e) {} }
+    else this.localSave();
+  },
+  /* photos: "a:<assetId>" in the cloud, "l:<id>" in IndexedDB */
+  async addPhoto(blob) {
+    if (this.mode === "cloud") {
+      if (!this.assets) throw new Error("Загрузка фото доступна только владельцу журнала");
+      const r = await this.assets.upload(blob, { type: blob.type || "image/jpeg" });
+      this.urls["a:" + r.id] = r.url;
+      return "a:" + r.id;
+    }
+    const id = "l:" + uid();
+    await this.idbReq("photos", "readwrite", s => s.put(blob, id));
+    return id;
+  },
+  async photoUrl(id) {
+    if (this.urls[id]) return this.urls[id];
+    if (id.startsWith("a:")) return (this.urls[id] = "/_blob/" + id.slice(2));
+    if (!this.idb) return "";
+    const b = await this.idbReq("photos", "readonly", s => s.get(id));
+    return b ? (this.urls[id] = URL.createObjectURL(b)) : "";
+  },
+  async delPhoto(id) {
+    try {
+      if (id.startsWith("a:") && this.assets) await this.assets.delete(id.slice(2));
+      else if (id.startsWith("l:") && this.idb) await this.idbReq("photos", "readwrite", s => s.delete(id));
+    } catch (e) {}
+  },
+  async photoBlob(id) {
+    if (id.startsWith("l:") && this.idb) return this.idbReq("photos", "readonly", s => s.get(id));
+    const u = await this.photoUrl(id); const r = await fetch(u); return r.blob();
+  },
+};
+
+/* ---------- computations ---------- */
+const byId = (coll, id) => state[coll].find(x => x.id === id);
+const orderTotal = o => num(o.price) * (num(o.qty) || 1);
+const orderPays = o => state.payments.filter(p => p.orderId === o.id);
+const payValue = p => p.kind === "refund" ? -num(p.amount) : num(p.amount);
+const orderPaid = o => orderPays(o).reduce((s, p) => s + payValue(p), 0);
+const live = o => o.status !== "cancelled";
+const orderDue = o => live(o) ? Math.max(0, orderTotal(o) - orderPaid(o)) : 0;
+function sums(orders) {
+  let total = 0, paid = 0, due = 0;
+  for (const o of orders) { const p = orderPaid(o); paid += p; if (live(o)) { total += orderTotal(o); due += Math.max(0, orderTotal(o) - p); } }
+  return { total, paid, due };
+}
+const clientOrders = id => state.orders.filter(o => o.clientId === id);
+const purchaseOrders = id => state.orders.filter(o => o.purchaseId === id);
+const bar = (paid, total) => {
+  const pct = total > 0 ? Math.min(100, paid / total * 100) : (paid > 0 ? 100 : 0);
+  return `<div class="bar" role="img" aria-label="Оплачено ${Math.round(pct)}%"><i class="${paid > total && total > 0 ? "over" : ""}" style="width:${pct}%"></i></div>`;
+};
+const chip = ([label, cls], extra = "") => `<span class="chip ${cls} ${extra}">${esc(label)}</span>`;
+function orderPayChip(o) {
+  if (!live(o)) return chip(ORDER_STATUS.cancelled);
+  const t = orderTotal(o), p = orderPaid(o);
+  if (p <= 0) return chip(["Не оплачен", "bad"], "stamp");
+  if (p < t) return chip(["Предоплата", "due"], "stamp");
+  return chip(["Оплачен", "ok"], "stamp");
+}
+
+/* ---------- routing ---------- */
+function route() {
+  const h = (location.hash || "#home").slice(1);
+  const m = h.match(/^(client|purchase)-(.+)$/);
+  if (m) return { name: m[1], id: m[2] };
+  return { name: ["home", "clients", "purchases", "payments"].includes(h) ? h : "home" };
+}
+let lastRoute = "";
+function go(hash) { if (location.hash === "#" + hash) render(); else location.hash = hash; }
+addEventListener("hashchange", () => { render(); scrollTo(0, 0); });
+
+/* ---------- views ---------- */
+function render() {
+  const r = route();
+  document.querySelectorAll("[data-nav]").forEach(a => {
+    const on = a.dataset.nav === r.name || (r.name === "client" && a.dataset.nav === "clients") || (r.name === "purchase" && a.dataset.nav === "purchases");
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+  const s = $("#sync");
+  s.textContent = !state.ready ? "загрузка" : Store.mode === "cloud" ? "облако" : "на устройстве";
+  s.className = "sync" + (Store.mode === "cloud" && state.ready ? " cloud" : "");
+  s.title = Store.mode === "cloud" ? "Данные синхронизируются между вашими устройствами" : "Данные хранятся только в этом браузере — делайте резервные копии";
+  if (!state.ready) return;
+  const v = $("#view");
+  const key = JSON.stringify(r);
+  const keepFocus = document.activeElement && v.contains(document.activeElement) && document.activeElement.id;
+  const caret = keepFocus && document.activeElement.selectionStart;
+  v.innerHTML = r.name === "client" ? viewClient(r.id) : r.name === "purchase" ? viewPurchase(r.id)
+    : r.name === "clients" ? viewClients() : r.name === "purchases" ? viewPurchases() : r.name === "payments" ? viewPayments() : viewHome();
+  if (keepFocus && key === lastRoute) { const el = document.getElementById(keepFocus); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch (e) {} } }
+  lastRoute = key;
+  hydratePhotos(v);
+}
+
+function viewHome() {
+  const all = sums(state.orders);
+  const activeP = state.purchases.filter(p => p.status !== "closed");
+  const debtors = state.clients.map(c => ({ c, ...sums(clientOrders(c.id)) })).filter(x => x.due > 0.005).sort((a, b) => b.due - a.due);
+  const recent = [...state.payments].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 6);
+  const waiting = state.orders.filter(o => o.status === "arrived" && orderDue(o) > 0).length;
+
+  if (!state.clients.length && !state.purchases.length) {
+    return `<div class="section"><div class="empty">
+      <b>Журнал пока пуст</b>
+      <div>Начните с закупки на фабрике, потом записывайте на неё клиентов: артикул, сумму, предоплату и фото чека.</div>
+      <div class="actions" style="justify-content:center">
+        <button class="btn primary" data-act="newPurchase">${icon.plus}Закупка</button>
+        <button class="btn" data-act="newClient">${icon.plus}Клиент</button>
+        <button class="btn" data-act="demo">Показать пример</button>
+      </div></div></div>`;
+  }
+  return `
+  <section class="ledger" aria-label="Сводка">
+    <div><div class="ledger-label">Клиенты должны доплатить</div><div class="ledger-big money due-text">${money(all.due)}</div></div>
+    <div class="ledger-row">
+      <div><b class="money">${money(all.paid)}</b><span>получено от клиентов</span></div>
+      <div><b class="money">${money(all.total)}</b><span>сумма всех заказов</span></div>
+      <div><b class="num">${activeP.length}</b><span>${plural(activeP.length, "активная закупка", "активные закупки", "активных закупок")}</span></div>
+    </div>
+  </section>
+  ${waiting ? `<div class="section"><button class="row" data-act="nav" data-to="purchases" style="border-color:var(--info)"><span class="chip info">Пришло</span><div class="row-main"><div class="row-title">${waiting} ${plural(waiting, "заказ ждёт", "заказа ждут", "заказов ждут")} доплаты</div><div class="row-sub">Товар на руках, можно звать клиентов за второй частью</div></div></button></div>` : ""}
+  <section class="section">
+    <div class="section-head"><h2>Закупки в работе</h2><button class="link" data-act="newPurchase">+ Новая</button></div>
+    <div class="list">${activeP.length ? activeP.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(purchaseRow).join("") : `<div class="empty">Нет активных закупок</div>`}</div>
+  </section>
+  <section class="section">
+    <div class="section-head"><h2>Кто должен</h2><button class="link" data-act="nav" data-to="clients">Все клиенты</button></div>
+    <div class="list">${debtors.length ? debtors.slice(0, 8).map(x => clientRow(x.c, x)).join("") : `<div class="empty">Все рассчитались</div>`}</div>
+  </section>
+  <section class="section">
+    <div class="section-head"><h2>Последние оплаты</h2><button class="link" data-act="nav" data-to="payments">Все оплаты</button></div>
+    <div class="list">${recent.length ? recent.map(payRow).join("") : `<div class="empty">Оплат пока нет</div>`}</div>
+  </section>`;
+}
+
+function clientRow(c, s = sums(clientOrders(c.id))) {
+  const n = clientOrders(c.id).filter(live).length;
+  return `<button class="row" data-act="nav" data-to="client-${esc(c.id)}">
+    ${avatar(c)}
+    <div class="row-main"><div class="row-title">${esc(c.nick)}</div><div class="row-sub">${esc([c.name, c.phone].filter(Boolean).join(" · ") || "нет контактов")} · ${n} ${plural(n, "заказ", "заказа", "заказов")}</div></div>
+    <div class="row-end">${s.due > 0.005 ? `<b class="money" style="color:var(--due)">${money(s.due)}</b><small>к доплате</small>` : s.total > 0 ? `<b style="color:var(--accent)">✓</b><small>оплачено</small>` : `<small>—</small>`}</div>
+  </button>`;
+}
+function purchaseRow(p) {
+  const os = purchaseOrders(p.id), s = sums(os);
+  const cl = new Set(os.filter(live).map(o => o.clientId)).size;
+  return `<button class="row" data-act="nav" data-to="purchase-${esc(p.id)}" style="display:grid;gap:8px">
+    <div style="display:flex;gap:10px;align-items:flex-start">
+      <div class="row-main"><div class="row-title">${esc(p.title)}</div><div class="row-sub">${esc([p.factory, fmtDate(p.date)].filter(Boolean).join(" · "))} · ${cl} ${plural(cl, "клиент", "клиента", "клиентов")}</div></div>
+      ${chip(PURCHASE_STATUS[p.status] || PURCHASE_STATUS.open)}
+    </div>
+    ${bar(s.paid, s.total)}
+    <div class="sums"><span>Собрано <b class="money">${money(s.paid)}</b> из <b class="money">${money(s.total)}</b></span>${s.due > 0.005 ? `<span class="due">Ждём <b class="money">${money(s.due)}</b></span>` : ""}</div>
+  </button>`;
+}
+function payRow(p) {
+  const o = byId("orders", p.orderId); const c = o && byId("clients", o.clientId);
+  return `<button class="row" data-act="editPayment" data-id="${esc(p.id)}">
+    ${c ? avatar(c) : `<div class="avatar" style="background:var(--ink-3)">?</div>`}
+    <div class="row-main"><div class="row-title">${esc(c ? c.nick : "Удалённый заказ")}</div><div class="row-sub">${PAY_KIND[p.kind] || "Оплата"} · ${esc(o ? (o.article ? "арт. " + o.article : o.name) : "")} · ${fmtDate(p.date)}</div></div>
+    ${photoThumbs(p.photos, 2)}
+    <div class="row-end"><b class="money" style="color:${p.kind === "refund" ? "var(--bad)" : "var(--accent)"}">${p.kind === "refund" ? "−" : "+"}${money(num(p.amount))}</b></div>
+  </button>`;
+}
+function photoThumbs(ids, max = 3) {
+  if (!ids || !ids.length) return "";
+  return `<span class="thumbs">${ids.slice(0, max).map(id => `<img class="thumb" alt="Чек" data-photo="${esc(id)}">`).join("")}</span>`;
+}
+
+function viewClients() {
+  const q = ui.clientQ.trim().toLowerCase();
+  let rows = state.clients.map(c => ({ c, ...sums(clientOrders(c.id)) }));
+  if (q) rows = rows.filter(({ c }) => [c.nick, c.name, c.phone, c.contact, c.note].some(x => String(x || "").toLowerCase().includes(q))
+    || clientOrders(c.id).some(o => String(o.article || "").toLowerCase().includes(q)));
+  if (ui.onlyDue) rows = rows.filter(r => r.due > 0.005);
+  rows.sort(ui.clientSort === "name" ? (a, b) => a.c.nick.localeCompare(b.c.nick, "ru") : (a, b) => b.due - a.due || a.c.nick.localeCompare(b.c.nick, "ru"));
+  return `<div class="section" style="margin-top:6px">
+    <div class="section-head"><h1 class="page-title">Клиенты <span style="color:var(--ink-3)">${state.clients.length}</span></h1><button class="btn primary sm" data-act="newClient">${icon.plus}Клиент</button></div>
+    <label class="search">${icon.search}<span class="sr">Поиск</span><input id="clientQ" data-input="clientQ" value="${esc(ui.clientQ)}" placeholder="Ник, имя, телефон или артикул" autocomplete="off"></label>
+    <div class="seg">
+      <button data-act="clientSort" data-v="due" aria-pressed="${ui.clientSort === "due"}">По долгу</button>
+      <button data-act="clientSort" data-v="name" aria-pressed="${ui.clientSort === "name"}">По нику</button>
+      <button data-act="onlyDue" aria-pressed="${ui.onlyDue}">Только с долгом</button>
+    </div>
+    <div class="list">${rows.length ? rows.map(r => clientRow(r.c, r)).join("") : `<div class="empty">${q ? "Никого не нашли" : "Клиентов пока нет"}</div>`}</div>
+  </div>`;
+}
+
+function viewPurchases() {
+  const f = ui.purchaseFilter;
+  const list = state.purchases.filter(p => f === "all" || (f === "active" ? p.status !== "closed" : p.status === "closed"))
+    .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  return `<div class="section" style="margin-top:6px">
+    <div class="section-head"><h1 class="page-title">Закупки</h1><button class="btn primary sm" data-act="newPurchase">${icon.plus}Закупка</button></div>
+    <div class="seg">
+      <button data-act="pFilter" data-v="active" aria-pressed="${f === "active"}">В работе</button>
+      <button data-act="pFilter" data-v="closed" aria-pressed="${f === "closed"}">Закрытые</button>
+      <button data-act="pFilter" data-v="all" aria-pressed="${f === "all"}">Все</button>
+    </div>
+    <div class="list">${list.length ? list.map(purchaseRow).join("") : `<div class="empty">Здесь пока пусто</div>`}</div>
+  </div>`;
+}
+
+function viewPayments() {
+  const q = ui.payQ.trim().toLowerCase();
+  let list = [...state.payments];
+  if (q) list = list.filter(p => { const o = byId("orders", p.orderId); const c = o && byId("clients", o.clientId);
+    return [c && c.nick, o && o.article, o && o.name, p.note, p.method].some(x => String(x || "").toLowerCase().includes(q)); });
+  list.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0));
+  const total = list.reduce((s, p) => s + payValue(p), 0);
+  const withPhoto = list.filter(p => p.photos && p.photos.length).length;
+  return `<div class="section" style="margin-top:6px">
+    <h1 class="page-title">Оплаты</h1>
+    <label class="search">${icon.search}<span class="sr">Поиск</span><input id="payQ" data-input="payQ" value="${esc(ui.payQ)}" placeholder="Ник, артикул, комментарий" autocomplete="off"></label>
+    <div class="sums"><span>Итого <b class="money">${money(total)}</b></span><span>${list.length} ${plural(list.length, "платёж", "платежа", "платежей")}</span><span>с чеком: <b>${withPhoto}</b></span></div>
+    <div class="list">${list.length ? list.map(payRow).join("") : `<div class="empty">Оплат пока нет. Оплату добавляют из заказа клиента.</div>`}</div>
+  </div>`;
+}
+
+function backBtn(to, label) { return `<button class="btn ghost sm" data-act="nav" data-to="${to}" style="margin-left:-8px">${icon.back}${label}</button>`; }
+
+function viewClient(id) {
+  const c = byId("clients", id);
+  if (!c) return `${backBtn("clients", "Клиенты")}<div class="empty">Клиент не найден</div>`;
+  const os = clientOrders(id), s = sums(os);
+  const groups = {};
+  for (const o of os) (groups[o.purchaseId || ""] ||= []).push(o);
+  const keys = Object.keys(groups).sort((a, b) => ((byId("purchases", b) || {}).date || "").localeCompare(((byId("purchases", a) || {}).date || "")));
+  return `${backBtn("clients", "Клиенты")}
+  <div class="card">
+    <div class="hero">${avatar(c, true)}<div style="min-width:0;flex:1"><h1>${esc(c.nick)}</h1>
+      <div class="meta">${c.name ? `<span>${esc(c.name)}</span>` : ""}${c.phone ? `<span class="mono">${esc(c.phone)}</span>` : ""}${c.contact ? `<span>${esc(c.contact)}</span>` : ""}</div></div></div>
+    ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
+    <div class="kpis"><div class="kpi"><span>Заказано</span><b class="money">${money(s.total)}</b></div><div class="kpi ok"><span>Оплатил</span><b class="money">${money(s.paid)}</b></div><div class="kpi due"><span>Должен</span><b class="money">${money(s.due)}</b></div></div>
+    <div class="actions">
+      <button class="btn primary" data-act="newOrder" data-client="${esc(id)}">${icon.plus}Заказ</button>
+      <button class="btn" data-act="editClient" data-id="${esc(id)}">${icon.edit}Изменить</button>
+      ${c.phone || c.contact ? `<button class="btn" data-act="copy" data-text="${esc([c.phone, c.contact].filter(Boolean).join(" "))}">${icon.copy}Контакт</button>` : ""}
+      ${s.due > 0.005 ? `<button class="btn" data-act="copyClientDue" data-id="${esc(id)}">${icon.copy}Текст о доплате</button>` : ""}
+    </div>
+  </div>
+  <div class="section">
+    ${os.length ? keys.map(k => { const p = byId("purchases", k);
+      return `<div class="group-title"><span>${p ? esc(p.title) : "Без закупки"}</span>${p ? chip(PURCHASE_STATUS[p.status] || PURCHASE_STATUS.open) : ""}</div>
+      ${groups[k].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(o => orderCard(o, "client")).join("")}`; }).join("")
+    : `<div class="empty"><b>Заказов нет</b><div>Добавьте товар, на который записался клиент.</div><button class="btn primary" data-act="newOrder" data-client="${esc(id)}">${icon.plus}Заказ</button></div>`}
+  </div>`;
+}
+
+function orderCard(o, ctx) {
+  const c = byId("clients", o.clientId), p = byId("purchases", o.purchaseId);
+  const t = orderTotal(o), paid = orderPaid(o), due = orderDue(o);
+  const pays = orderPays(o).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const head = ctx === "purchase"
+    ? `${c ? avatar(c) : ""}<div class="row-main"><button class="order-title" style="background:none;border:0;padding:0;text-align:left" data-act="nav" data-to="client-${esc(o.clientId)}">${esc(c ? c.nick : "—")}</button><div class="order-sub">${o.article ? `<span class="art">${esc(o.article)}</span> ` : ""}${esc(o.name || "")}${o.variant ? " · " + esc(o.variant) : ""}</div></div>`
+    : `<div class="row-main"><div class="order-title">${o.article ? `<span class="art">${esc(o.article)}</span> ` : ""}${esc(o.name || "Товар")}</div><div class="order-sub">${esc([o.variant, p && ctx !== "client" ? p.title : ""].filter(Boolean).join(" · "))}</div></div>`;
+  return `<article class="order">
+    <div class="order-top">
+      <div class="order-head">${head}<div style="display:grid;gap:4px;justify-items:end">${orderPayChip(o)}${live(o) ? chip(ORDER_STATUS[o.status] || ORDER_STATUS.waiting) : ""}</div></div>
+      ${bar(paid, t)}
+      <div class="sums"><span><b class="num">${num(o.qty) || 1}</b> × <b class="money">${money(num(o.price))}</b> = <b class="money">${money(t)}</b></span><span>Внесено <b class="money">${money(paid)}</b></span>${due > 0.005 ? `<span class="due">Доплата <b class="money">${money(due)}</b></span>` : ""}</div>
+      ${o.note ? `<div class="note">${esc(o.note)}</div>` : ""}
+    </div>
+    ${pays.length ? `<div class="perf"></div><div class="pays">${pays.map(py => `<button class="pay" data-act="editPayment" data-id="${esc(py.id)}">
+      ${chip([PAY_KIND[py.kind] || "Оплата", py.kind === "refund" ? "bad" : py.kind === "final" ? "ok" : "due"])}
+      <div class="pay-main"><div>${fmtDate(py.date)}${py.method ? " · " + esc(py.method) : ""}</div>${py.note ? `<small>${esc(py.note)}</small>` : ""}</div>
+      ${photoThumbs(py.photos, 2)}
+      <b class="money">${py.kind === "refund" ? "−" : ""}${money(num(py.amount))}</b></button>`).join("")}</div>` : ""}
+    <div class="order-foot">
+      <button class="btn primary sm" data-act="newPayment" data-order="${esc(o.id)}">${icon.plus}Оплата</button>
+      <button class="btn sm" data-act="orderStatus" data-id="${esc(o.id)}">Статус</button>
+      <button class="btn sm" data-act="editOrder" data-id="${esc(o.id)}">${icon.edit}Изменить</button>
+    </div>
+  </article>`;
+}
+
+function viewPurchase(id) {
+  const p = byId("purchases", id);
+  if (!p) return `${backBtn("purchases", "Закупки")}<div class="empty">Закупка не найдена</div>`;
+  let os = purchaseOrders(id); const s = sums(os);
+  const clients = new Set(os.filter(live).map(o => o.clientId)).size;
+  const units = os.filter(live).reduce((a, o) => a + (num(o.qty) || 1), 0);
+  if (ui.onlyDue) os = os.filter(o => orderDue(o) > 0.005);
+  os.sort((a, b) => ((byId("clients", a.clientId) || {}).nick || "").localeCompare(((byId("clients", b.clientId) || {}).nick || ""), "ru"));
+  return `${backBtn("purchases", "Закупки")}
+  <div class="card">
+    <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between"><div style="min-width:0"><h1 class="page-title" style="margin:0;overflow-wrap:anywhere">${esc(p.title)}</h1>
+      <div class="meta">${p.factory ? `<span>Фабрика: ${esc(p.factory)}</span>` : ""}${p.date ? `<span>${fmtDate(p.date)}</span>` : ""}<span>${clients} ${plural(clients, "клиент", "клиента", "клиентов")} · ${units} шт.</span></div></div>
+      ${chip(PURCHASE_STATUS[p.status] || PURCHASE_STATUS.open)}</div>
+    ${p.note ? `<div class="note">${esc(p.note)}</div>` : ""}
+    ${bar(s.paid, s.total)}
+    <div class="kpis"><div class="kpi"><span>Сумма заказов</span><b class="money">${money(s.total)}</b></div><div class="kpi ok"><span>Собрано</span><b class="money">${money(s.paid)}</b></div><div class="kpi due"><span>Ждём доплат</span><b class="money">${money(s.due)}</b></div></div>
+    <div class="actions">
+      <button class="btn primary" data-act="newOrder" data-purchase="${esc(id)}">${icon.plus}Заказ клиента</button>
+      <button class="btn" data-act="purchaseStatus" data-id="${esc(id)}">Статус</button>
+      <button class="btn" data-act="editPurchase" data-id="${esc(id)}">${icon.edit}Изменить</button>
+      <button class="btn" data-act="copyDebts" data-id="${esc(id)}">${icon.copy}Список доплат</button>
+      ${purchaseOrders(id).some(o => o.status === "waiting") ? `<button class="btn" data-act="allArrived" data-id="${esc(id)}">Товар пришёл у всех</button>` : ""}
+    </div>
+  </div>
+  <div class="section">
+    <div class="seg"><button data-act="onlyDue" aria-pressed="${ui.onlyDue}">Только с долгом</button></div>
+    ${os.length ? os.map(o => orderCard(o, "purchase")).join("") : `<div class="empty"><b>${ui.onlyDue ? "Долгов нет" : "Пока никто не записан"}</b>${ui.onlyDue ? "" : `<button class="btn primary" data-act="newOrder" data-purchase="${esc(id)}">${icon.plus}Записать клиента</button>`}</div>`}
+  </div>`;
+}
+
+/* ---------- photos ---------- */
+function hydratePhotos(root) {
+  root.querySelectorAll("img[data-photo]").forEach(async img => {
+    const u = await Store.photoUrl(img.dataset.photo);
+    if (u) img.src = u;
+  });
+}
+async function compress(file) {
+  if (!/^image\//.test(file.type) || file.type === "image/gif") return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+    cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
+    const b = await new Promise(r => cv.toBlob(r, "image/jpeg", 0.85));
+    return b && b.size < file.size ? b : file;
+  } catch (e) { return file; }
+}
+
+/* ---------- sheet (modal) ---------- */
+let sheetCtx = null;
+function openSheet({ title, body, submit = "Сохранить", onSubmit, del, wide }) {
+  closeSheet();
+  sheetCtx = { onSubmit, del, photos: null };
+  $("#layer").innerHTML = `<div class="scrim" data-act="scrim"><form class="sheet" id="sheet" novalidate role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="sheet-head"><h3>${esc(title)}</h3><button type="button" class="icon-btn" data-act="closeSheet" aria-label="Закрыть"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="sheet-body">${body}</div>
+    ${onSubmit || del ? `<div class="sheet-foot">${del ? `<button type="button" class="btn danger" data-act="sheetDelete">Удалить</button>` : ""}${onSubmit ? `<button type="submit" class="btn primary">${esc(submit)}</button>` : ""}</div>` : ""}
+  </form></div>`;
+  const f = $("#sheet");
+  f.addEventListener("submit", async e => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(f).entries());
+    const btn = f.querySelector('[type="submit"]'); if (btn) btn.disabled = true;
+    try { const keep = await sheetCtx.onSubmit(data, f); if (keep !== false) closeSheet(); }
+    catch (err) { toast(err.message || "Ошибка"); }
+    if (btn) btn.disabled = false;
+  });
+  hydratePhotos(f);
+  const first = f.querySelector("input:not([type=file]),select,textarea"); if (first && matchMedia("(pointer:fine)").matches) first.focus();
+}
+function closeSheet() { $("#layer").innerHTML = ""; sheetCtx = null; }
+function ask(text, okLabel, onOk) {
+  openSheet({ title: "Подтвердите", body: `<p style="margin:0">${text}</p>`, submit: okLabel, onSubmit: onOk });
+  const b = $("#sheet [type=submit]"); b.classList.remove("primary"); b.style.background = "var(--bad)"; b.style.borderColor = "var(--bad)"; b.style.color = "#fff";
+}
+
+const field = (label, html, hint) => `<div class="field"><label>${label}</label>${html}${hint ? `<div class="hint">${hint}</div>` : ""}</div>`;
+const inp = (id, name, val, attrs = "") => `<input id="${id}" name="${name}" value="${esc(val ?? "")}" ${attrs}>`;
+const sel = (id, name, opts, val) => `<select id="${id}" name="${name}">${opts.map(([v, l]) => `<option value="${esc(v)}"${v === val ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+
+/* photo picker inside a sheet */
+function pickerHtml() {
+  return `<div class="field"><label>Фото чека / скриншот перевода</label><div class="picker" id="picker"></div><div class="hint">Чек остаётся у оплаты — пригодится, если возникнет спор.</div></div>`;
+}
+function initPicker(existing) {
+  sheetCtx.photos = (existing || []).map(id => ({ id }));
+  sheetCtx.removed = [];
+  drawPicker();
+}
+function drawPicker() {
+  const el = $("#picker"); if (!el) return;
+  el.innerHTML = sheetCtx.photos.map((p, i) => `<div class="ph"><img alt="Чек ${i + 1}" ${p.id ? `data-photo="${esc(p.id)}"` : `src="${p.url}"`} data-act="viewPhoto" data-i="${i}"><button type="button" data-act="unpick" data-i="${i}" aria-label="Убрать фото">×</button></div>`).join("")
+    + `<label class="add" for="photoIn">${icon.cam}Добавить</label><input class="sr" id="photoIn" type="file" accept="image/*" multiple>`;
+  hydratePhotos(el);
+  $("#photoIn").addEventListener("change", async e => {
+    for (const file of e.target.files) { const blob = await compress(file); sheetCtx.photos.push({ blob, url: URL.createObjectURL(blob) }); }
+    drawPicker();
+  });
+}
+async function commitPhotos() {
+  const ids = [];
+  for (const p of sheetCtx.photos) {
+    if (p.id) ids.push(p.id);
+    else ids.push(await Store.addPhoto(p.blob));
+  }
+  for (const id of sheetCtx.removed) Store.delPhoto(id);
+  return ids;
+}
+
+/* ---------- forms ---------- */
+function clientForm(c) {
+  const isNew = !c; c = c || {};
+  openSheet({
+    title: isNew ? "Новый клиент" : "Клиент",
+    body: field("Ник *", inp("f-nick", "nick", c.nick, 'required placeholder="@nickname" autocomplete="off"'), "Как вы его узнаёте в чате. Можно поменять в любой момент.")
+      + `<div class="grid2">${field("Имя", inp("f-name", "name", c.name, 'autocomplete="off"'))}${field("Телефон", inp("f-phone", "phone", c.phone, 'inputmode="tel" autocomplete="off"'))}</div>`
+      + field("Где общаетесь", inp("f-contact", "contact", c.contact, 'placeholder="Telegram, Instagram, WhatsApp…"'))
+      + field("Заметка", `<textarea id="f-note" name="note">${esc(c.note || "")}</textarea>`),
+    del: !isNew && (() => ask(`Удалить клиента <b>${esc(c.nick)}</b> вместе со всеми его заказами, оплатами и чеками?`, "Удалить", async () => {
+      for (const o of clientOrders(c.id)) await deleteOrder(o);
+      await Store.remove("clients", c.id); go("clients"); toast("Клиент удалён");
+    })),
+    onSubmit: async d => {
+      const nick = d.nick.trim(); if (!nick) throw new Error("Укажите ник клиента");
+      const dup = state.clients.find(x => x.nick.toLowerCase() === nick.toLowerCase() && x.id !== c.id);
+      if (dup) throw new Error("Клиент с таким ником уже есть");
+      const obj = { ...c, id: c.id || uid(), nick, name: d.name.trim(), phone: d.phone.trim(), contact: d.contact.trim(), note: d.note.trim(), createdAt: c.createdAt || Date.now() };
+      await Store.put("clients", obj);
+      toast(isNew ? "Клиент добавлен" : "Сохранено");
+      if (isNew && route().name !== "purchase") go("client-" + obj.id);
+    },
+  });
+}
+
+function purchaseForm(p) {
+  const isNew = !p; p = p || { date: today(), status: "open" };
+  openSheet({
+    title: isNew ? "Новая закупка" : "Закупка",
+    body: field("Название *", inp("f-title", "title", p.title, 'required placeholder="Например: Кроссовки, октябрь" autocomplete="off"'))
+      + `<div class="grid2">${field("Фабрика / поставщик", inp("f-factory", "factory", p.factory, 'autocomplete="off"'))}${field("Дата", inp("f-date", "date", p.date, 'type="date"'))}</div>`
+      + field("Статус", sel("f-status", "status", Object.entries(PURCHASE_STATUS).map(([k, v]) => [k, v[0]]), p.status))
+      + field("Заметка", `<textarea id="f-pnote" name="note" placeholder="Сроки, условия фабрики, трек-номер…">${esc(p.note || "")}</textarea>`),
+    del: !isNew && (() => { const n = purchaseOrders(p.id).length;
+      ask(`Удалить закупку <b>${esc(p.title)}</b>${n ? ` и ${n} ${plural(n, "заказ", "заказа", "заказов")} в ней (с оплатами и чеками)` : ""}?`, "Удалить", async () => {
+        for (const o of purchaseOrders(p.id)) await deleteOrder(o);
+        await Store.remove("purchases", p.id); go("purchases"); toast("Закупка удалена");
+      }); }),
+    onSubmit: async d => {
+      if (!d.title.trim()) throw new Error("Назовите закупку");
+      const obj = { ...p, id: p.id || uid(), title: d.title.trim(), factory: d.factory.trim(), date: d.date, status: d.status, note: d.note.trim(), createdAt: p.createdAt || Date.now() };
+      await Store.put("purchases", obj); toast(isNew ? "Закупка создана" : "Сохранено");
+      if (isNew) go("purchase-" + obj.id);
+    },
+  });
+}
+
+function orderForm(o, preset = {}) {
+  const isNew = !o; o = o || { qty: 1, status: "waiting", clientId: preset.client, purchaseId: preset.purchase || (state.purchases.filter(p => p.status === "open").sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] || {}).id };
+  const cl = o.clientId && byId("clients", o.clientId);
+  const pOpts = [["", "Без закупки"], ...state.purchases.filter(p => p.status !== "closed" || p.id === o.purchaseId).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => [p.id, p.title])];
+  openSheet({
+    title: isNew ? "Заказ клиента" : "Изменить заказ",
+    body: field("Клиент *", inp("f-client", "client", cl ? cl.nick : "", 'list="clientList" required placeholder="Ник — выберите или введите новый" autocomplete="off"')
+        + `<datalist id="clientList">${state.clients.map(c => `<option value="${esc(c.nick)}">${esc(c.name || "")}</option>`).join("")}</datalist>`, "Если такого ника нет, клиент создастся автоматически.")
+      + field("Закупка", sel("f-purchase", "purchaseId", pOpts, o.purchaseId || ""))
+      + `<div class="grid2">${field("Артикул", inp("f-article", "article", o.article, 'autocomplete="off" placeholder="A-1043"'))}${field("Размер / цвет", inp("f-variant", "variant", o.variant, 'autocomplete="off"'))}</div>`
+      + field("Товар", inp("f-name2", "name", o.name, 'autocomplete="off" placeholder="Что заказал"'))
+      + `<div class="grid2">${field("Количество", inp("f-qty", "qty", o.qty, 'type="number" min="1" step="1" inputmode="numeric"'))}${field("Цена за шт. *", inp("f-price", "price", o.price, 'inputmode="decimal" required placeholder="0"'), `<span id="totalHint"></span>`)}</div>`
+      + field("Заметка", `<textarea id="f-onote" name="note">${esc(o.note || "")}</textarea>`)
+      + (isNew ? `<fieldset class="fieldset"><legend>Предоплата сразу</legend>
+          <div class="grid2">${field("Сумма", inp("f-pre", "pre", "", 'inputmode="decimal" placeholder="0"'))}${field("Способ", sel("f-premethod", "method", PAY_METHOD.map(m => [m, m]), PAY_METHOD[0]))}</div>
+          <div class="quick" id="preQuick"><button type="button" data-pct="30">30%</button><button type="button" data-pct="50">50%</button><button type="button" data-pct="100">100%</button></div>
+          ${pickerHtml()}</fieldset>` : ""),
+    del: !isNew && (() => ask(`Удалить заказ${o.article ? " арт. <b>" + esc(o.article) + "</b>" : ""} вместе с оплатами и чеками?`, "Удалить", async () => { await deleteOrder(o); toast("Заказ удалён"); })),
+    onSubmit: async d => {
+      const nick = d.client.trim(); if (!nick) throw new Error("Укажите клиента");
+      if (!(num(d.price) > 0)) throw new Error("Укажите цену");
+      let c = state.clients.find(x => x.nick.toLowerCase() === nick.toLowerCase());
+      if (!c) { c = { id: uid(), nick, name: "", phone: "", contact: "", note: "", createdAt: Date.now() }; await Store.put("clients", c); }
+      const obj = { ...o, id: o.id || uid(), clientId: c.id, purchaseId: d.purchaseId, article: d.article.trim(), variant: d.variant.trim(), name: d.name.trim(),
+        qty: Math.max(1, Math.round(num(d.qty)) || 1), price: num(d.price), note: d.note.trim(), createdAt: o.createdAt || Date.now() };
+      let photos = [];
+      if (isNew && num(d.pre) > 0) photos = await commitPhotos();
+      await Store.put("orders", obj);
+      if (isNew && num(d.pre) > 0) await Store.put("payments", { id: uid(), orderId: obj.id, amount: num(d.pre), kind: "prepay", method: d.method, date: today(), note: "", photos, createdAt: Date.now() });
+      toast(isNew ? "Заказ добавлен" : "Сохранено");
+    },
+  });
+  const f = $("#sheet");
+  const upd = () => { const t = num(f.qty.value || 1) * num(f.price.value); $("#totalHint").textContent = t > 0 ? "Итого " + money(t) : ""; };
+  f.addEventListener("input", upd); upd();
+  if (isNew) {
+    initPicker([]);
+    $("#preQuick").addEventListener("click", e => { const b = e.target.closest("[data-pct]"); if (!b) return;
+      f.pre.value = Math.round(num(f.qty.value || 1) * num(f.price.value) * b.dataset.pct / 100); });
+  }
+}
+
+function paymentForm(p, orderId) {
+  const isNew = !p; const o = byId("orders", p ? p.orderId : orderId); if (!o) return toast("Заказ не найден");
+  const paid = orderPaid(o), t = orderTotal(o), due = Math.max(0, t - paid);
+  p = p || { kind: paid > 0 ? "final" : "prepay", date: today(), method: PAY_METHOD[0], photos: [] };
+  const c = byId("clients", o.clientId);
+  openSheet({
+    title: isNew ? "Оплата" : "Оплата " + fmtDate(p.date),
+    body: `<div class="note"><b>${esc(c ? c.nick : "")}</b> · ${o.article ? "арт. " + esc(o.article) + " · " : ""}${esc(o.name || "")}<br>Сумма заказа ${money(t)} · внесено ${money(paid)} · <b style="color:var(--due)">осталось ${money(due)}</b></div>`
+      + `<div class="grid2">${field("Сумма *", inp("f-amount", "amount", p.amount, 'inputmode="decimal" required placeholder="0"'))}${field("Тип", sel("f-kind", "kind", Object.entries(PAY_KIND), p.kind))}</div>`
+      + (isNew ? `<div class="quick" id="payQuick">${due > 0 ? `<button type="button" data-v="${due}">Весь остаток</button>` : ""}<button type="button" data-v="${Math.round(t * .3)}">30%</button><button type="button" data-v="${Math.round(t * .5)}">50%</button></div>` : "")
+      + `<div class="grid2">${field("Дата", inp("f-pdate", "date", p.date, 'type="date"'))}${field("Способ", sel("f-method", "method", PAY_METHOD.map(m => [m, m]), p.method))}</div>`
+      + field("Комментарий", inp("f-pnote2", "note", p.note, 'autocomplete="off" placeholder="Например: перевод с карты жены"'))
+      + pickerHtml(),
+    del: !isNew && (() => ask("Удалить эту оплату и её чеки?", "Удалить", async () => {
+      for (const id of p.photos || []) Store.delPhoto(id);
+      await Store.remove("payments", p.id); toast("Оплата удалена");
+    })),
+    onSubmit: async d => {
+      if (!(num(d.amount) > 0)) throw new Error("Укажите сумму");
+      const photos = await commitPhotos();
+      await Store.put("payments", { ...p, id: p.id || uid(), orderId: o.id, amount: num(d.amount), kind: d.kind, date: d.date || today(), method: d.method, note: d.note.trim(), photos, createdAt: p.createdAt || Date.now() });
+      toast(isNew ? "Оплата записана" : "Сохранено");
+    },
+  });
+  initPicker(p.photos);
+  const q = $("#payQuick"); if (q) q.addEventListener("click", e => { const b = e.target.closest("[data-v]"); if (b) $("#f-amount").value = b.dataset.v; });
+}
+
+function statusPicker(title, map, current, onPick) {
+  openSheet({ title, body: `<div class="list">${Object.entries(map).map(([k, [l, cls]]) => `<button type="button" class="row" data-act="pickStatus" data-v="${k}">${chip([l, cls])}<div class="row-main"></div>${k === current ? "<b>✓</b>" : ""}</button>`).join("")}</div>` });
+  sheetCtx.onPick = onPick;
+}
+
+async function deleteOrder(o) {
+  for (const p of orderPays(o)) { for (const id of p.photos || []) Store.delPhoto(id); await Store.remove("payments", p.id); }
+  await Store.remove("orders", o.id);
+}
+
+function copyText(text, label = "Скопировано") {
+  const fallback = () => openSheet({ title: "Скопируйте текст", body: `<textarea class="copybox" id="copybox" readonly>${esc(text)}</textarea><div class="hint">Выделите текст и скопируйте вручную.</div>` });
+  try { navigator.clipboard.writeText(text).then(() => toast(label), fallback); } catch (e) { fallback(); }
+}
+
+function debtsText(p) {
+  const byClient = {};
+  for (const o of purchaseOrders(p.id)) { const d = orderDue(o); if (d > 0.005) (byClient[o.clientId] ||= []).push(o); }
+  const lines = Object.entries(byClient).map(([cid, os]) => { const c = byId("clients", cid);
+    const due = os.reduce((s, o) => s + orderDue(o), 0);
+    return `${c ? c.nick : "?"} — ${money(due)} (${os.map(o => (o.article ? "арт. " + o.article : o.name || "товар") + (num(o.qty) > 1 ? " ×" + o.qty : "")).join(", ")})`; });
+  return `${p.title}\nДоплаты:\n${lines.join("\n") || "долгов нет"}`;
+}
+
+/* ---------- backup ---------- */
+async function exportBackup() {
+  toast("Готовим копию…");
+  const photos = {};
+  for (const p of state.payments) for (const id of p.photos || []) {
+    try { const b = await Store.photoBlob(id); if (b) photos[id] = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); }); } catch (e) {}
+  }
+  const data = { app: "zhurnal-zakupok", version: 1, exportedAt: new Date().toISOString(), settings: state.settings };
+  for (const k of COLLS) data[k] = state[k];
+  data.photos = photos;
+  const json = JSON.stringify(data);
+  const filename = "zhurnal-zakupok-" + today() + ".json";
+  let dl = null;
+  try { dl = window.claude && await window.claude.use("downloads"); } catch (e) {}
+  if (dl) { try { await dl.save({ filename, data: new Blob([json], { type: "application/json" }) }); toast("Копия сохранена"); } catch (e) { toast("Сохранение отменено"); } return; }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([json], { type: "application/json" })); a.download = filename; a.click();
+  toast("Копия сохранена");
+}
+async function importBackup(file) {
+  let data; try { data = JSON.parse(await file.text()); } catch (e) { return toast("Это не файл копии журнала"); }
+  if (data.app !== "zhurnal-zakupok") return toast("Это не файл копии журнала");
+  toast("Восстанавливаем…");
+  const map = {};
+  for (const [oldId, dataUrl] of Object.entries(data.photos || {})) {
+    try {
+      const [head, b64] = dataUrl.split(",");
+      const bin = atob(b64); const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      map[oldId] = await Store.addPhoto(new Blob([bytes], { type: (head.match(/data:([^;]+)/) || [])[1] || "image/jpeg" }));
+    } catch (e) {}
+  }
+  for (const k of COLLS) for (const item of data[k] || []) {
+    if (k === "payments") item.photos = (item.photos || []).map(id => map[id]).filter(Boolean);
+    await Store.put(k, item);
+  }
+  if (data.settings) { state.settings = { ...state.settings, ...data.settings }; await Store.saveSettings(); }
+  closeSheet(); toast("Данные восстановлены");
+}
+function menuSheet() {
+  const cloud = Store.mode === "cloud";
+  openSheet({ title: "Настройки",
+    body: `<div class="note">${cloud ? "Журнал хранится в облаке и одинаково открывается на телефоне и компьютере. Фото чеков тоже в облаке." : "Журнал хранится только в этом браузере. Регулярно сохраняйте резервную копию — если очистить данные браузера, записи пропадут."}</div>`
+      + field("Валюта", sel("f-cur", "currency", [["₽", "₽ рубль"], ["₸", "₸ тенге"], ["Br", "Br бел. рубль"], ["$", "$ доллар"], ["¥", "¥ юань"], ["€", "€ евро"]], state.settings.currency))
+      + `<div class="fieldset"><legend>Резервная копия</legend><div class="hint">Все клиенты, закупки, оплаты и фото чеков в одном файле.</div>
+         <div class="actions"><button type="button" class="btn" data-act="export">Сохранить копию</button><label class="btn" for="importIn" style="cursor:pointer">Восстановить из файла</label><input class="sr" type="file" id="importIn" accept="application/json,.json"></div></div>`
+      + `<div class="hint" style="text-align:center">Клиентов: ${state.clients.length} · закупок: ${state.purchases.length} · заказов: ${state.orders.length} · оплат: ${state.payments.length}</div>`,
+    submit: "Готово",
+    onSubmit: async d => { if (d.currency !== state.settings.currency) { state.settings.currency = d.currency; await Store.saveSettings(); } },
+  });
+  $("#importIn").addEventListener("change", e => { const f = e.target.files[0]; if (f) importBackup(f); });
+}
+
+/* ---------- demo data (clearly marked) ---------- */
+async function loadDemo() {
+  const p1 = { id: uid(), title: "Пример: Пуховики, ноябрь", factory: "Фабрика Гуанчжоу", date: today(), status: "shipping", note: "Это пример — удалите закупку, когда разберётесь", createdAt: Date.now() };
+  const p2 = { id: uid(), title: "Пример: Сумки, сбор", factory: "Baigou Bags", date: today(), status: "open", note: "", createdAt: Date.now() };
+  const c1 = { id: uid(), nick: "@anna_пример", name: "Анна", phone: "+7 900 000-00-01", contact: "Telegram", note: "", createdAt: Date.now() };
+  const c2 = { id: uid(), nick: "@marina_пример", name: "Марина", phone: "", contact: "Instagram", note: "Просит упаковать в подарок", createdAt: Date.now() };
+  const o1 = { id: uid(), clientId: c1.id, purchaseId: p1.id, article: "PX-2207", name: "Пуховик длинный", variant: "M, чёрный", qty: 1, price: 8900, status: "waiting", note: "", createdAt: Date.now() };
+  const o2 = { id: uid(), clientId: c2.id, purchaseId: p1.id, article: "PX-1180", name: "Пуховик короткий", variant: "S, бежевый", qty: 2, price: 6400, status: "waiting", note: "", createdAt: Date.now() };
+  const o3 = { id: uid(), clientId: c1.id, purchaseId: p2.id, article: "BG-55", name: "Сумка шоппер", variant: "", qty: 1, price: 3200, status: "waiting", note: "", createdAt: Date.now() };
+  for (const x of [p1, p2]) await Store.put("purchases", x);
+  for (const x of [c1, c2]) await Store.put("clients", x);
+  for (const x of [o1, o2, o3]) await Store.put("orders", x);
+  await Store.put("payments", { id: uid(), orderId: o1.id, amount: 4450, kind: "prepay", method: "СБП", date: today(), note: "", photos: [], createdAt: Date.now() });
+  await Store.put("payments", { id: uid(), orderId: o2.id, amount: 12800, kind: "prepay", method: "Перевод на карту", date: today(), note: "Оплатила сразу всё", photos: [], createdAt: Date.now() });
+  toast("Пример добавлен — его можно удалить");
+}
+
+/* ---------- toast & viewer ---------- */
+let toastT;
+function toast(msg) {
+  let t = $(".toast"); if (!t) { t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.textContent = msg; clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 2600);
+}
+async function viewPhoto(src) {
+  const v = document.createElement("div"); v.className = "viewer";
+  v.innerHTML = `<div class="viewer-bar"><span>Чек</span><button class="btn sm" type="button">Закрыть</button></div><div class="viewer-img"><img alt="Чек" src="${esc(src)}"></div>`;
+  v.addEventListener("click", e => { if (e.target.tagName !== "IMG") v.remove(); });
+  document.body.appendChild(v);
+}
+
+/* ---------- events ---------- */
+const actions = {
+  nav: el => go(el.dataset.to),
+  menu: () => menuSheet(),
+  export: () => exportBackup(),
+  demo: () => loadDemo(),
+  quickAdd: () => {
+    const r = route();
+    if (r.name === "client") return orderForm(null, { client: r.id });
+    if (r.name === "purchase") return orderForm(null, { purchase: r.id });
+    openSheet({ title: "Добавить", body: `<div class="list">
+      <button type="button" class="row" data-act="newOrder"><div class="row-main"><div class="row-title">Заказ клиента</div><div class="row-sub">Клиент записался на товар</div></div></button>
+      <button type="button" class="row" data-act="newPurchase"><div class="row-main"><div class="row-title">Закупка</div><div class="row-sub">Новый заказ на фабрике</div></div></button>
+      <button type="button" class="row" data-act="newClient"><div class="row-main"><div class="row-title">Клиент</div><div class="row-sub">Ник, телефон, заметки</div></div></button></div>` });
+  },
+  newClient: () => clientForm(),
+  editClient: el => clientForm(byId("clients", el.dataset.id)),
+  newPurchase: () => purchaseForm(),
+  editPurchase: el => purchaseForm(byId("purchases", el.dataset.id)),
+  newOrder: el => orderForm(null, { client: el.dataset.client, purchase: el.dataset.purchase }),
+  editOrder: el => orderForm(byId("orders", el.dataset.id)),
+  newPayment: el => paymentForm(null, el.dataset.order),
+  editPayment: el => { const p = byId("payments", el.dataset.id); if (p) paymentForm(p); },
+  orderStatus: el => { const o = byId("orders", el.dataset.id);
+    statusPicker("Статус заказа", ORDER_STATUS, o.status, v => Store.put("orders", { ...o, status: v })); },
+  purchaseStatus: el => { const p = byId("purchases", el.dataset.id);
+    statusPicker("Статус закупки", PURCHASE_STATUS, p.status, v => Store.put("purchases", { ...p, status: v })); },
+  pickStatus: el => { const f = sheetCtx.onPick; closeSheet(); f(el.dataset.v); toast("Статус обновлён"); },
+  allArrived: async el => { const p = byId("purchases", el.dataset.id);
+    for (const o of purchaseOrders(p.id)) if (o.status === "waiting") await Store.put("orders", { ...o, status: "arrived" });
+    await Store.put("purchases", { ...p, status: "arrived" }); toast("Отмечено: товар пришёл"); },
+  copyDebts: el => copyText(debtsText(byId("purchases", el.dataset.id)), "Список доплат скопирован"),
+  copyClientDue: el => { const c = byId("clients", el.dataset.id);
+    const os = clientOrders(c.id).filter(o => orderDue(o) > 0.005);
+    const total = os.reduce((s, o) => s + orderDue(o), 0);
+    copyText(`Здравствуйте! Напоминаю про доплату — ${money(total)}:\n` + os.map(o => `• ${o.article ? "арт. " + o.article + " " : ""}${o.name || ""}${o.variant ? " (" + o.variant + ")" : ""}: ${money(orderDue(o))}`).join("\n"), "Текст скопирован"); },
+  copy: el => copyText(el.dataset.text),
+  clientSort: el => { ui.clientSort = el.dataset.v; render(); },
+  onlyDue: () => { ui.onlyDue = !ui.onlyDue; render(); },
+  pFilter: el => { ui.purchaseFilter = el.dataset.v; render(); },
+  closeSheet: () => closeSheet(),
+  scrim: (el, e) => { if (e.target === el) closeSheet(); },
+  sheetDelete: () => sheetCtx && sheetCtx.del && sheetCtx.del(),
+  unpick: el => { const [p] = sheetCtx.photos.splice(+el.dataset.i, 1); if (p && p.id) sheetCtx.removed.push(p.id); drawPicker(); },
+  viewPhoto: el => viewPhoto(el.src),
+};
+document.addEventListener("click", e => {
+  const img = e.target.closest("img.thumb");
+  if (img && img.src) { e.stopPropagation(); e.preventDefault(); return viewPhoto(img.src); }
+  const el = e.target.closest("[data-act]"); if (!el) return;
+  const f = actions[el.dataset.act]; if (!f) return;
+  if (el.dataset.act !== "scrim") e.preventDefault();
+  f(el, e);
+});
+document.addEventListener("input", e => { const k = e.target.dataset && e.target.dataset.input; if (k) { ui[k] = e.target.value; render(); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { const v = $(".viewer"); if (v) v.remove(); else closeSheet(); } });
+
+render();
+Store.init();
+})();
+</script>
