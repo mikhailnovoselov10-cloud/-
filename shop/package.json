@@ -1,0 +1,19 @@
+{
+  "name": "sp-shop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Сайт совместных закупок: каталоги фабрик, запись клиентов под фото",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-deprecation --disable-warning=ExperimentalWarning server.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^5.3.0",
+    "multer": "^2.4.0",
+    "sharp": "^0.35.5"
+  }
+}
