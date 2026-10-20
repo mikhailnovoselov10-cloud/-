@@ -144,6 +144,24 @@ button.row:hover{border-color:var(--ink-3)}
 .thumbs{display:flex;gap:4px}
 .thumb{width:30px;height:30px;border-radius:7px;object-fit:cover;background:var(--surface-2);border:1px solid var(--line)}
 .order-foot{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 14px}
+.items{display:grid;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.item{display:flex;align-items:center;gap:10px;background:var(--surface);border:0;border-top:1px solid var(--line);padding:9px 12px;text-align:left;width:100%}
+.item:first-child{border-top:0}
+.item:hover{background:var(--surface-2)}
+.item.off{opacity:.5;text-decoration:line-through}
+.item-main{flex:1;min-width:0}
+.item-name{font-weight:700;font-size:14px;overflow-wrap:anywhere}
+.item-sub{font-size:12px;color:var(--ink-3)}
+.item-sum{text-align:right;flex:none}
+.item-sum b{display:block;font-weight:800;font-size:14px}
+.item-sum small{font-size:11px;color:var(--ink-3)}
+.items-edit{display:grid;gap:10px}
+.itemrow{border:1px solid var(--line);border-radius:14px;padding:10px 12px 12px;display:grid;gap:8px;background:var(--surface-2)}
+.itemrow .field input{background:var(--surface)}
+.itemrow-head{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.items-edit{counter-reset:it}
+.itemrow{counter-increment:it}
+.itemrow-head span::after{content:" " counter(it)}
 
 .group-title{font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin-top:8px;display:flex;justify-content:space-between;gap:8px}
 
@@ -394,18 +412,39 @@ const Store = {
 };
 
 /* ---------- computations ---------- */
+/* A "share" is one client inside one purchase: several items, one pool of payments. */
 const byId = (coll, id) => state[coll].find(x => x.id === id);
 const orderTotal = o => num(o.price) * (num(o.qty) || 1);
-const orderPays = o => state.payments.filter(p => p.orderId === o.id);
 const payValue = p => p.kind === "refund" ? -num(p.amount) : num(p.amount);
-const orderPaid = o => orderPays(o).reduce((s, p) => s + payValue(p), 0);
 const live = o => o.status !== "cancelled";
-const orderDue = o => live(o) ? Math.max(0, orderTotal(o) - orderPaid(o)) : 0;
-function sums(orders) {
+function payShare(p) {
+  if (p.orderId) { const o = byId("orders", p.orderId); if (o) return { clientId: o.clientId, purchaseId: o.purchaseId || "" }; }
+  return { clientId: p.clientId, purchaseId: p.purchaseId || "" };
+}
+const shareKey = (cid, pid) => cid + "|" + (pid || "");
+function shareMap() {
+  const m = new Map();
+  const get = (cid, pid) => { const k = shareKey(cid, pid); if (!m.has(k)) m.set(k, { clientId: cid, purchaseId: pid || "", orders: [], pays: [] }); return m.get(k); };
+  for (const p of state.purchases) for (const cid of p.members || []) if (byId("clients", cid)) get(cid, p.id);
+  for (const o of state.orders) get(o.clientId, o.purchaseId).orders.push(o);
+  for (const p of state.payments) { const s = payShare(p); if (s.clientId) get(s.clientId, s.purchaseId).pays.push(p); }
+  for (const s of m.values()) {
+    s.total = s.orders.filter(live).reduce((a, o) => a + orderTotal(o), 0);
+    s.paid = s.pays.reduce((a, p) => a + payValue(p), 0);
+    s.due = Math.max(0, s.total - s.paid);
+    s.items = s.orders.filter(live).reduce((a, o) => a + (num(o.qty) || 1), 0);
+  }
+  return m;
+}
+const allShares = () => [...shareMap().values()];
+const shareOf = (cid, pid) => shareMap().get(shareKey(cid, pid)) || { clientId: cid, purchaseId: pid || "", orders: [], pays: [], total: 0, paid: 0, due: 0, items: 0 };
+function sums(shares) {
   let total = 0, paid = 0, due = 0;
-  for (const o of orders) { const p = orderPaid(o); paid += p; if (live(o)) { total += orderTotal(o); due += Math.max(0, orderTotal(o) - p); } }
+  for (const s of shares) { total += s.total; paid += s.paid; due += s.due; }
   return { total, paid, due };
 }
+const clientShares = id => allShares().filter(s => s.clientId === id);
+const purchaseShares = id => allShares().filter(s => s.purchaseId === id);
 const clientOrders = id => state.orders.filter(o => o.clientId === id);
 const purchaseOrders = id => state.orders.filter(o => o.purchaseId === id);
 const bar = (paid, total) => {
@@ -413,13 +452,13 @@ const bar = (paid, total) => {
   return `<div class="bar" role="img" aria-label="Оплачено ${Math.round(pct)}%"><i class="${paid > total && total > 0 ? "over" : ""}" style="width:${pct}%"></i></div>`;
 };
 const chip = ([label, cls], extra = "") => `<span class="chip ${cls} ${extra}">${esc(label)}</span>`;
-function orderPayChip(o) {
-  if (!live(o)) return chip(ORDER_STATUS.cancelled);
-  const t = orderTotal(o), p = orderPaid(o);
-  if (p <= 0) return chip(["Не оплачен", "bad"], "stamp");
-  if (p < t) return chip(["Предоплата", "due"], "stamp");
-  return chip(["Оплачен", "ok"], "stamp");
+function sharePayChip(s) {
+  if (!s.total && !s.paid) return chip(["Нет вещей", "mute"], "stamp");
+  if (s.paid <= 0) return chip(["Не оплачено", "bad"], "stamp");
+  if (s.paid < s.total) return chip(["Предоплата", "due"], "stamp");
+  return chip(["Оплачено", "ok"], "stamp");
 }
+const itemLabel = o => [o.article ? "арт. " + o.article : "", o.name, o.variant ? "(" + o.variant + ")" : ""].filter(Boolean).join(" ") || "вещь";
 
 /* ---------- routing ---------- */
 function route() {
@@ -456,16 +495,17 @@ function render() {
 }
 
 function viewHome() {
-  const all = sums(state.orders);
+  const shares = allShares();
+  const all = sums(shares);
   const activeP = state.purchases.filter(p => p.status !== "closed");
-  const debtors = state.clients.map(c => ({ c, ...sums(clientOrders(c.id)) })).filter(x => x.due > 0.005).sort((a, b) => b.due - a.due);
+  const debtors = state.clients.map(c => ({ c, ...sums(shares.filter(s => s.clientId === c.id)) })).filter(x => x.due > 0.005).sort((a, b) => b.due - a.due);
   const recent = [...state.payments].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 6);
-  const waiting = state.orders.filter(o => o.status === "arrived" && orderDue(o) > 0).length;
+  const waiting = shares.filter(s => s.due > 0.005 && s.orders.some(o => o.status === "arrived")).length;
 
   if (!state.clients.length && !state.purchases.length) {
     return `<div class="section"><div class="empty">
       <b>Журнал пока пуст</b>
-      <div>Начните с закупки на фабрике, потом записывайте на неё клиентов: артикул, сумму, предоплату и фото чека.</div>
+      <div>Начните с закупки на фабрике, потом добавляйте в неё клиентов и вешайте на каждого его вещи: артикул, цену, предоплату и фото чека.</div>
       <div class="actions" style="justify-content:center">
         <button class="btn primary" data-act="newPurchase">${icon.plus}Закупка</button>
         <button class="btn" data-act="newClient">${icon.plus}Клиент</button>
@@ -481,7 +521,7 @@ function viewHome() {
       <div><b class="num">${activeP.length}</b><span>${plural(activeP.length, "активная закупка", "активные закупки", "активных закупок")}</span></div>
     </div>
   </section>
-  ${waiting ? `<div class="section"><button class="row" data-act="nav" data-to="purchases" style="border-color:var(--info)"><span class="chip info">Пришло</span><div class="row-main"><div class="row-title">${waiting} ${plural(waiting, "заказ ждёт", "заказа ждут", "заказов ждут")} доплаты</div><div class="row-sub">Товар на руках, можно звать клиентов за второй частью</div></div></button></div>` : ""}
+  ${waiting ? `<div class="section"><button class="row" data-act="nav" data-to="purchases" style="border-color:var(--info)"><span class="chip info">Пришло</span><div class="row-main"><div class="row-title">${waiting} ${plural(waiting, "клиент ждёт", "клиента ждут", "клиентов ждут")} выдачи с доплатой</div><div class="row-sub">Товар на руках, можно звать за второй частью</div></div></button></div>` : ""}
   <section class="section">
     <div class="section-head"><h2>Закупки в работе</h2><button class="link" data-act="newPurchase">+ Новая</button></div>
     <div class="list">${activeP.length ? activeP.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(purchaseRow).join("") : `<div class="empty">Нет активных закупок</div>`}</div>
@@ -496,17 +536,17 @@ function viewHome() {
   </section>`;
 }
 
-function clientRow(c, s = sums(clientOrders(c.id))) {
-  const n = clientOrders(c.id).filter(live).length;
+function clientRow(c, s = sums(clientShares(c.id))) {
+  const n = clientShares(c.id).filter(x => x.purchaseId).length;
   return `<button class="row" data-act="nav" data-to="client-${esc(c.id)}">
     ${avatar(c)}
-    <div class="row-main"><div class="row-title">${esc(c.nick)}</div><div class="row-sub">${esc([c.name, c.phone].filter(Boolean).join(" · ") || "нет контактов")} · ${n} ${plural(n, "заказ", "заказа", "заказов")}</div></div>
+    <div class="row-main"><div class="row-title">${esc(c.nick)}</div><div class="row-sub">${esc([c.name, c.phone].filter(Boolean).join(" · ") || "нет контактов")} · ${n} ${plural(n, "закупка", "закупки", "закупок")}</div></div>
     <div class="row-end">${s.due > 0.005 ? `<b class="money" style="color:var(--due)">${money(s.due)}</b><small>к доплате</small>` : s.total > 0 ? `<b style="color:var(--accent)">✓</b><small>оплачено</small>` : `<small>—</small>`}</div>
   </button>`;
 }
 function purchaseRow(p) {
-  const os = purchaseOrders(p.id), s = sums(os);
-  const cl = new Set(os.filter(live).map(o => o.clientId)).size;
+  const shares = purchaseShares(p.id), s = sums(shares);
+  const cl = shares.length;
   return `<button class="row" data-act="nav" data-to="purchase-${esc(p.id)}" style="display:grid;gap:8px">
     <div style="display:flex;gap:10px;align-items:flex-start">
       <div class="row-main"><div class="row-title">${esc(p.title)}</div><div class="row-sub">${esc([p.factory, fmtDate(p.date)].filter(Boolean).join(" · "))} · ${cl} ${plural(cl, "клиент", "клиента", "клиентов")}</div></div>
@@ -517,10 +557,10 @@ function purchaseRow(p) {
   </button>`;
 }
 function payRow(p) {
-  const o = byId("orders", p.orderId); const c = o && byId("clients", o.clientId);
+  const sh = payShare(p); const c = byId("clients", sh.clientId); const pu = byId("purchases", sh.purchaseId); const o = p.orderId && byId("orders", p.orderId);
   return `<button class="row" data-act="editPayment" data-id="${esc(p.id)}">
     ${c ? avatar(c) : `<div class="avatar" style="background:var(--ink-3)">?</div>`}
-    <div class="row-main"><div class="row-title">${esc(c ? c.nick : "Удалённый заказ")}</div><div class="row-sub">${PAY_KIND[p.kind] || "Оплата"} · ${esc(o ? (o.article ? "арт. " + o.article : o.name) : "")} · ${fmtDate(p.date)}</div></div>
+    <div class="row-main"><div class="row-title">${esc(c ? c.nick : "Удалённый клиент")}</div><div class="row-sub">${PAY_KIND[p.kind] || "Оплата"} · ${esc(o ? itemLabel(o) : pu ? pu.title : "без закупки")} · ${fmtDate(p.date)}</div></div>
     ${photoThumbs(p.photos, 2)}
     <div class="row-end"><b class="money" style="color:${p.kind === "refund" ? "var(--bad)" : "var(--accent)"}">${p.kind === "refund" ? "−" : "+"}${money(num(p.amount))}</b></div>
   </button>`;
@@ -532,7 +572,8 @@ function photoThumbs(ids, max = 3) {
 
 function viewClients() {
   const q = ui.clientQ.trim().toLowerCase();
-  let rows = state.clients.map(c => ({ c, ...sums(clientOrders(c.id)) }));
+  const shares = allShares();
+  let rows = state.clients.map(c => ({ c, ...sums(shares.filter(s => s.clientId === c.id)) }));
   if (q) rows = rows.filter(({ c }) => [c.nick, c.name, c.phone, c.contact, c.note].some(x => String(x || "").toLowerCase().includes(q))
     || clientOrders(c.id).some(o => String(o.article || "").toLowerCase().includes(q)));
   if (ui.onlyDue) rows = rows.filter(r => r.due > 0.005);
@@ -567,16 +608,16 @@ function viewPurchases() {
 function viewPayments() {
   const q = ui.payQ.trim().toLowerCase();
   let list = [...state.payments];
-  if (q) list = list.filter(p => { const o = byId("orders", p.orderId); const c = o && byId("clients", o.clientId);
-    return [c && c.nick, o && o.article, o && o.name, p.note, p.method].some(x => String(x || "").toLowerCase().includes(q)); });
+  if (q) list = list.filter(p => { const sh = payShare(p); const c = byId("clients", sh.clientId); const pu = byId("purchases", sh.purchaseId); const o = p.orderId && byId("orders", p.orderId);
+    return [c && c.nick, pu && pu.title, o && o.article, o && o.name, p.note, p.method].some(x => String(x || "").toLowerCase().includes(q)); });
   list.sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.createdAt || 0) - (a.createdAt || 0));
   const total = list.reduce((s, p) => s + payValue(p), 0);
   const withPhoto = list.filter(p => p.photos && p.photos.length).length;
   return `<div class="section" style="margin-top:6px">
     <h1 class="page-title">Оплаты</h1>
-    <label class="search">${icon.search}<span class="sr">Поиск</span><input id="payQ" data-input="payQ" value="${esc(ui.payQ)}" placeholder="Ник, артикул, комментарий" autocomplete="off"></label>
+    <label class="search">${icon.search}<span class="sr">Поиск</span><input id="payQ" data-input="payQ" value="${esc(ui.payQ)}" placeholder="Ник, закупка, артикул, комментарий" autocomplete="off"></label>
     <div class="sums"><span>Итого <b class="money">${money(total)}</b></span><span>${list.length} ${plural(list.length, "платёж", "платежа", "платежей")}</span><span>с чеком: <b>${withPhoto}</b></span></div>
-    <div class="list">${list.length ? list.map(payRow).join("") : `<div class="empty">Оплат пока нет. Оплату добавляют из заказа клиента.</div>`}</div>
+    <div class="list">${list.length ? list.map(payRow).join("") : `<div class="empty">Оплат пока нет. Оплату вносят в карточке клиента внутри закупки.</div>`}</div>
   </div>`;
 }
 
@@ -585,10 +626,8 @@ function backBtn(to, label) { return `<button class="btn ghost sm" data-act="nav
 function viewClient(id) {
   const c = byId("clients", id);
   if (!c) return `${backBtn("clients", "Клиенты")}<div class="empty">Клиент не найден</div>`;
-  const os = clientOrders(id), s = sums(os);
-  const groups = {};
-  for (const o of os) (groups[o.purchaseId || ""] ||= []).push(o);
-  const keys = Object.keys(groups).sort((a, b) => ((byId("purchases", b) || {}).date || "").localeCompare(((byId("purchases", a) || {}).date || "")));
+  const shares = clientShares(id).sort((a, b) => ((byId("purchases", b.purchaseId) || {}).date || "").localeCompare(((byId("purchases", a.purchaseId) || {}).date || "")));
+  const s = sums(shares);
   return `${backBtn("clients", "Клиенты")}
   <div class="card">
     <div class="hero">${avatar(c, true)}<div style="min-width:0;flex:1"><h1>${esc(c.nick)}</h1>
@@ -596,33 +635,37 @@ function viewClient(id) {
     ${c.note ? `<div class="note">${esc(c.note)}</div>` : ""}
     <div class="kpis"><div class="kpi"><span>Заказано</span><b class="money">${money(s.total)}</b></div><div class="kpi ok"><span>Оплатил</span><b class="money">${money(s.paid)}</b></div><div class="kpi due"><span>Должен</span><b class="money">${money(s.due)}</b></div></div>
     <div class="actions">
-      <button class="btn primary" data-act="newOrder" data-client="${esc(id)}">${icon.plus}Заказ</button>
+      <button class="btn primary" data-act="newShare" data-client="${esc(id)}">${icon.plus}В закупку</button>
       <button class="btn" data-act="editClient" data-id="${esc(id)}">${icon.edit}Изменить</button>
       ${c.phone || c.contact ? `<button class="btn" data-act="copy" data-text="${esc([c.phone, c.contact].filter(Boolean).join(" "))}">${icon.copy}Контакт</button>` : ""}
       ${s.due > 0.005 ? `<button class="btn" data-act="copyClientDue" data-id="${esc(id)}">${icon.copy}Текст о доплате</button>` : ""}
     </div>
   </div>
   <div class="section">
-    ${os.length ? keys.map(k => { const p = byId("purchases", k);
-      return `<div class="group-title"><span>${p ? esc(p.title) : "Без закупки"}</span>${p ? chip(PURCHASE_STATUS[p.status] || PURCHASE_STATUS.open) : ""}</div>
-      ${groups[k].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map(o => orderCard(o, "client")).join("")}`; }).join("")
-    : `<div class="empty"><b>Заказов нет</b><div>Добавьте товар, на который записался клиент.</div><button class="btn primary" data-act="newOrder" data-client="${esc(id)}">${icon.plus}Заказ</button></div>`}
+    ${shares.length ? shares.map(sh => shareCard(sh, "client")).join("")
+    : `<div class="empty"><b>Клиент пока ни в одной закупке</b><div>Добавьте его в закупку и укажите вещи, которые он берёт.</div><button class="btn primary" data-act="newShare" data-client="${esc(id)}">${icon.plus}Добавить в закупку</button></div>`}
   </div>`;
 }
 
-function orderCard(o, ctx) {
-  const c = byId("clients", o.clientId), p = byId("purchases", o.purchaseId);
-  const t = orderTotal(o), paid = orderPaid(o), due = orderDue(o);
-  const pays = orderPays(o).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+/* One client inside one purchase: their items, totals, payments and actions. */
+function shareCard(sh, ctx) {
+  const c = byId("clients", sh.clientId), p = byId("purchases", sh.purchaseId);
+  const pays = [...sh.pays].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const items = [...sh.orders].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const data = `data-client="${esc(sh.clientId)}" data-purchase="${esc(sh.purchaseId)}"`;
   const head = ctx === "purchase"
-    ? `${c ? avatar(c) : ""}<div class="row-main"><button class="order-title" style="background:none;border:0;padding:0;text-align:left" data-act="nav" data-to="client-${esc(o.clientId)}">${esc(c ? c.nick : "—")}</button><div class="order-sub">${o.article ? `<span class="art">${esc(o.article)}</span> ` : ""}${esc(o.name || "")}${o.variant ? " · " + esc(o.variant) : ""}</div></div>`
-    : `<div class="row-main"><div class="order-title">${o.article ? `<span class="art">${esc(o.article)}</span> ` : ""}${esc(o.name || "Товар")}</div><div class="order-sub">${esc([o.variant, p && ctx !== "client" ? p.title : ""].filter(Boolean).join(" · "))}</div></div>`;
+    ? `${c ? avatar(c) : ""}<div class="row-main"><button class="order-title" style="background:none;border:0;padding:0;text-align:left" data-act="nav" data-to="client-${esc(sh.clientId)}">${esc(c ? c.nick : "—")}</button><div class="order-sub">${sh.items} ${plural(sh.items, "вещь", "вещи", "вещей")}${c && c.name ? " · " + esc(c.name) : ""}</div></div>`
+    : `<div class="row-main">${p ? `<button class="order-title" style="background:none;border:0;padding:0;text-align:left" data-act="nav" data-to="purchase-${esc(p.id)}">${esc(p.title)}</button>` : `<div class="order-title">Без закупки</div>`}<div class="order-sub">${sh.items} ${plural(sh.items, "вещь", "вещи", "вещей")}${p ? " · " + esc((PURCHASE_STATUS[p.status] || PURCHASE_STATUS.open)[0]) : ""}</div></div>`;
   return `<article class="order">
     <div class="order-top">
-      <div class="order-head">${head}<div style="display:grid;gap:4px;justify-items:end">${orderPayChip(o)}${live(o) ? chip(ORDER_STATUS[o.status] || ORDER_STATUS.waiting) : ""}</div></div>
-      ${bar(paid, t)}
-      <div class="sums"><span><b class="num">${num(o.qty) || 1}</b> × <b class="money">${money(num(o.price))}</b> = <b class="money">${money(t)}</b></span><span>Внесено <b class="money">${money(paid)}</b></span>${due > 0.005 ? `<span class="due">Доплата <b class="money">${money(due)}</b></span>` : ""}</div>
-      ${o.note ? `<div class="note">${esc(o.note)}</div>` : ""}
+      <div class="order-head">${head}${sharePayChip(sh)}</div>
+      ${items.length ? `<div class="items">${items.map(o => `<button class="item${live(o) ? "" : " off"}" data-act="editOrder" data-id="${esc(o.id)}">
+        <div class="item-main"><div class="item-name">${o.article ? `<span class="art">${esc(o.article)}</span> ` : ""}${esc(o.name || (o.article ? "" : "Вещь"))}</div>
+          <div class="item-sub">${esc(o.variant || "")}${o.variant ? " · " : ""}${esc((ORDER_STATUS[o.status] || ORDER_STATUS.waiting)[0])}</div></div>
+        <div class="item-sum"><b class="money">${money(orderTotal(o))}</b>${(num(o.qty) || 1) > 1 ? `<small class="num">${num(o.qty)} × ${money(num(o.price))}</small>` : ""}</div>
+      </button>`).join("")}</div>` : `<div class="note">Вещей пока нет — добавьте, что клиент берёт в этой закупке.</div>`}
+      ${bar(sh.paid, sh.total)}
+      <div class="sums"><span>Итого <b class="money">${money(sh.total)}</b></span><span>Внесено <b class="money">${money(sh.paid)}</b></span>${sh.due > 0.005 ? `<span class="due">Доплата <b class="money">${money(sh.due)}</b></span>` : sh.paid > sh.total + 0.005 ? `<span>Переплата <b class="money">${money(sh.paid - sh.total)}</b></span>` : ""}</div>
     </div>
     ${pays.length ? `<div class="perf"></div><div class="pays">${pays.map(py => `<button class="pay" data-act="editPayment" data-id="${esc(py.id)}">
       ${chip([PAY_KIND[py.kind] || "Оплата", py.kind === "refund" ? "bad" : py.kind === "final" ? "ok" : "due"])}
@@ -630,9 +673,10 @@ function orderCard(o, ctx) {
       ${photoThumbs(py.photos, 2)}
       <b class="money">${py.kind === "refund" ? "−" : ""}${money(num(py.amount))}</b></button>`).join("")}</div>` : ""}
     <div class="order-foot">
-      <button class="btn primary sm" data-act="newPayment" data-order="${esc(o.id)}">${icon.plus}Оплата</button>
-      <button class="btn sm" data-act="orderStatus" data-id="${esc(o.id)}">Статус</button>
-      <button class="btn sm" data-act="editOrder" data-id="${esc(o.id)}">${icon.edit}Изменить</button>
+      <button class="btn primary sm" data-act="newPayment" ${data}>${icon.plus}Оплата</button>
+      <button class="btn sm" data-act="addItems" ${data}>${icon.plus}Вещь</button>
+      ${items.length ? `<button class="btn sm" data-act="shareStatus" ${data}>Статус</button>` : ""}
+      <button class="btn ghost sm" data-act="removeShare" ${data}>Убрать</button>
     </div>
   </article>`;
 }
@@ -640,11 +684,11 @@ function orderCard(o, ctx) {
 function viewPurchase(id) {
   const p = byId("purchases", id);
   if (!p) return `${backBtn("purchases", "Закупки")}<div class="empty">Закупка не найдена</div>`;
-  let os = purchaseOrders(id); const s = sums(os);
-  const clients = new Set(os.filter(live).map(o => o.clientId)).size;
-  const units = os.filter(live).reduce((a, o) => a + (num(o.qty) || 1), 0);
-  if (ui.onlyDue) os = os.filter(o => orderDue(o) > 0.005);
-  os.sort((a, b) => ((byId("clients", a.clientId) || {}).nick || "").localeCompare(((byId("clients", b.clientId) || {}).nick || ""), "ru"));
+  let shares = purchaseShares(id); const s = sums(shares);
+  const clients = shares.length;
+  const units = shares.reduce((a, x) => a + x.items, 0);
+  if (ui.onlyDue) shares = shares.filter(x => x.due > 0.005);
+  shares.sort((a, b) => ((byId("clients", a.clientId) || {}).nick || "").localeCompare(((byId("clients", b.clientId) || {}).nick || ""), "ru"));
   return `${backBtn("purchases", "Закупки")}
   <div class="card">
     <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between"><div style="min-width:0"><h1 class="page-title" style="margin:0;overflow-wrap:anywhere">${esc(p.title)}</h1>
@@ -654,7 +698,7 @@ function viewPurchase(id) {
     ${bar(s.paid, s.total)}
     <div class="kpis"><div class="kpi"><span>Сумма заказов</span><b class="money">${money(s.total)}</b></div><div class="kpi ok"><span>Собрано</span><b class="money">${money(s.paid)}</b></div><div class="kpi due"><span>Ждём доплат</span><b class="money">${money(s.due)}</b></div></div>
     <div class="actions">
-      <button class="btn primary" data-act="newOrder" data-purchase="${esc(id)}">${icon.plus}Заказ клиента</button>
+      <button class="btn primary" data-act="newShare" data-purchase="${esc(id)}">${icon.plus}Добавить клиента</button>
       <button class="btn" data-act="purchaseStatus" data-id="${esc(id)}">Статус</button>
       <button class="btn" data-act="editPurchase" data-id="${esc(id)}">${icon.edit}Изменить</button>
       <button class="btn" data-act="copyDebts" data-id="${esc(id)}">${icon.copy}Список доплат</button>
@@ -663,7 +707,7 @@ function viewPurchase(id) {
   </div>
   <div class="section">
     <div class="seg"><button data-act="onlyDue" aria-pressed="${ui.onlyDue}">Только с долгом</button></div>
-    ${os.length ? os.map(o => orderCard(o, "purchase")).join("") : `<div class="empty"><b>${ui.onlyDue ? "Долгов нет" : "Пока никто не записан"}</b>${ui.onlyDue ? "" : `<button class="btn primary" data-act="newOrder" data-purchase="${esc(id)}">${icon.plus}Записать клиента</button>`}</div>`}
+    ${shares.length ? shares.map(x => shareCard(x, "purchase")).join("") : `<div class="empty"><b>${ui.onlyDue ? "Долгов нет" : "В закупке пока никого"}</b>${ui.onlyDue ? "" : `<div>Добавьте клиента и сразу перечислите его вещи.</div><button class="btn primary" data-act="newShare" data-purchase="${esc(id)}">${icon.plus}Добавить клиента</button>`}</div>`}
   </div>`;
 }
 
@@ -757,7 +801,7 @@ function clientForm(c) {
       + field("Где общаетесь", inp("f-contact", "contact", c.contact, 'placeholder="Telegram, Instagram, WhatsApp…"'))
       + field("Заметка", `<textarea id="f-note" name="note">${esc(c.note || "")}</textarea>`),
     del: !isNew && (() => ask(`Удалить клиента <b>${esc(c.nick)}</b> вместе со всеми его заказами, оплатами и чеками?`, "Удалить", async () => {
-      for (const o of clientOrders(c.id)) await deleteOrder(o);
+      await deleteShareData(c.id, null);
       await Store.remove("clients", c.id); go("clients"); toast("Клиент удалён");
     })),
     onSubmit: async d => {
@@ -780,9 +824,9 @@ function purchaseForm(p) {
       + `<div class="grid2">${field("Фабрика / поставщик", inp("f-factory", "factory", p.factory, 'autocomplete="off"'))}${field("Дата", inp("f-date", "date", p.date, 'type="date"'))}</div>`
       + field("Статус", sel("f-status", "status", Object.entries(PURCHASE_STATUS).map(([k, v]) => [k, v[0]]), p.status))
       + field("Заметка", `<textarea id="f-pnote" name="note" placeholder="Сроки, условия фабрики, трек-номер…">${esc(p.note || "")}</textarea>`),
-    del: !isNew && (() => { const n = purchaseOrders(p.id).length;
-      ask(`Удалить закупку <b>${esc(p.title)}</b>${n ? ` и ${n} ${plural(n, "заказ", "заказа", "заказов")} в ней (с оплатами и чеками)` : ""}?`, "Удалить", async () => {
-        for (const o of purchaseOrders(p.id)) await deleteOrder(o);
+    del: !isNew && (() => { const n = purchaseShares(p.id).length;
+      ask(`Удалить закупку <b>${esc(p.title)}</b>${n ? ` вместе с ${n} ${plural(n, "клиентом", "клиентами", "клиентами")} в ней (вещи, оплаты и чеки)` : ""}?`, "Удалить", async () => {
+        for (const sh of purchaseShares(p.id)) await deleteShareData(sh.clientId, p.id);
         await Store.remove("purchases", p.id); go("purchases"); toast("Закупка удалена");
       }); }),
     onSubmit: async d => {
@@ -794,58 +838,125 @@ function purchaseForm(p) {
   });
 }
 
-function orderForm(o, preset = {}) {
-  const isNew = !o; o = o || { qty: 1, status: "waiting", clientId: preset.client, purchaseId: preset.purchase || (state.purchases.filter(p => p.status === "open").sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] || {}).id };
-  const cl = o.clientId && byId("clients", o.clientId);
-  const pOpts = [["", "Без закупки"], ...state.purchases.filter(p => p.status !== "closed" || p.id === o.purchaseId).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => [p.id, p.title])];
+const latestOpenPurchase = () => (state.purchases.filter(p => p.status === "open").sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0] || {}).id || "";
+const purchaseOptions = keep => [["", "Без закупки"], ...state.purchases.filter(p => p.status !== "closed" || p.id === keep).sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(p => [p.id, p.title])];
+const clientInput = nick => field("Клиент *", inp("f-client", "client", nick, 'list="clientList" required placeholder="Ник — выберите или введите новый" autocomplete="off"')
+  + `<datalist id="clientList">${state.clients.map(c => `<option value="${esc(c.nick)}">${esc(c.name || "")}</option>`).join("")}</datalist>`, "Если такого ника нет, клиент создастся автоматически.");
+async function ensureClient(nick) {
+  nick = nick.trim(); if (!nick) throw new Error("Укажите клиента");
+  let c = state.clients.find(x => x.nick.toLowerCase() === nick.toLowerCase());
+  if (!c) { c = { id: uid(), nick, name: "", phone: "", contact: "", note: "", createdAt: Date.now() }; await Store.put("clients", c); }
+  return c;
+}
+async function ensureMember(cid, pid) {
+  const p = byId("purchases", pid); if (!p || (p.members || []).includes(cid)) return;
+  await Store.put("purchases", { ...p, members: [...(p.members || []), cid] });
+}
+
+/* Add a client to a purchase and hang several items on them at once */
+let itemSeq = 0;
+function itemRowHtml() {
+  const n = itemSeq++;
+  return `<div class="itemrow" data-row="${n}">
+    <div class="itemrow-head"><span>Вещь</span><button type="button" class="btn ghost sm" data-act="dropItem" aria-label="Убрать вещь">×</button></div>
+    <div class="grid2">${field("Артикул", `<input id="it-art-${n}" data-k="article" autocomplete="off" placeholder="A-1043">`)}${field("Размер / цвет", `<input id="it-var-${n}" data-k="variant" autocomplete="off">`)}</div>
+    ${field("Товар", `<input id="it-name-${n}" data-k="name" autocomplete="off" placeholder="Что берёт">`)}
+    <div class="grid2">${field("Кол-во", `<input id="it-qty-${n}" data-k="qty" type="number" min="1" step="1" value="1" inputmode="numeric">`)}${field("Цена за шт.", `<input id="it-price-${n}" data-k="price" inputmode="decimal" placeholder="0">`)}</div>
+  </div>`;
+}
+function readItems(f) {
+  const rows = [...f.querySelectorAll("[data-row]")].map(r => {
+    const g = k => r.querySelector(`[data-k="${k}"]`).value.trim();
+    return { article: g("article"), variant: g("variant"), name: g("name"), qty: Math.max(1, Math.round(num(g("qty"))) || 1), price: num(g("price")) };
+  }).filter(x => x.article || x.name || x.variant || x.price);
+  const bad = rows.find(x => !(x.price > 0));
+  if (bad) throw new Error(`Укажите цену для «${bad.article || bad.name || bad.variant}»`);
+  return rows;
+}
+function shareForm({ client, purchase } = {}) {
+  const c = client && byId("clients", client), p = purchase && byId("purchases", purchase);
+  const fixed = c && purchase !== undefined;
+  const pid = purchase !== undefined ? purchase : latestOpenPurchase();
+  const existing = c && shareOf(c.id, pid);
   openSheet({
-    title: isNew ? "Заказ клиента" : "Изменить заказ",
-    body: field("Клиент *", inp("f-client", "client", cl ? cl.nick : "", 'list="clientList" required placeholder="Ник — выберите или введите новый" autocomplete="off"')
-        + `<datalist id="clientList">${state.clients.map(c => `<option value="${esc(c.nick)}">${esc(c.name || "")}</option>`).join("")}</datalist>`, "Если такого ника нет, клиент создастся автоматически.")
-      + field("Закупка", sel("f-purchase", "purchaseId", pOpts, o.purchaseId || ""))
-      + `<div class="grid2">${field("Артикул", inp("f-article", "article", o.article, 'autocomplete="off" placeholder="A-1043"'))}${field("Размер / цвет", inp("f-variant", "variant", o.variant, 'autocomplete="off"'))}</div>`
-      + field("Товар", inp("f-name2", "name", o.name, 'autocomplete="off" placeholder="Что заказал"'))
-      + `<div class="grid2">${field("Количество", inp("f-qty", "qty", o.qty, 'type="number" min="1" step="1" inputmode="numeric"'))}${field("Цена за шт. *", inp("f-price", "price", o.price, 'inputmode="decimal" required placeholder="0"'), `<span id="totalHint"></span>`)}</div>`
-      + field("Заметка", `<textarea id="f-onote" name="note">${esc(o.note || "")}</textarea>`)
-      + (isNew ? `<fieldset class="fieldset"><legend>Предоплата сразу</legend>
-          <div class="grid2">${field("Сумма", inp("f-pre", "pre", "", 'inputmode="decimal" placeholder="0"'))}${field("Способ", sel("f-premethod", "method", PAY_METHOD.map(m => [m, m]), PAY_METHOD[0]))}</div>
-          <div class="quick" id="preQuick"><button type="button" data-pct="30">30%</button><button type="button" data-pct="50">50%</button><button type="button" data-pct="100">100%</button></div>
-          ${pickerHtml()}</fieldset>` : ""),
-    del: !isNew && (() => ask(`Удалить заказ${o.article ? " арт. <b>" + esc(o.article) + "</b>" : ""} вместе с оплатами и чеками?`, "Удалить", async () => { await deleteOrder(o); toast("Заказ удалён"); })),
+    title: fixed ? "Вещи для " + c.nick : "Клиент в закупку",
+    submit: "Сохранить",
+    body: (fixed ? `<div class="note"><b>${esc(c.nick)}</b> · ${esc(p ? p.title : "без закупки")}${existing && existing.total ? `<br>Уже на ${money(existing.total)}, внесено ${money(existing.paid)}` : ""}</div>`
+        : clientInput(c ? c.nick : "") + field("Закупка", sel("f-purchase", "purchaseId", purchaseOptions(pid), pid)))
+      + `<div class="items-edit" id="itemRows">${itemRowHtml()}</div>
+         <button type="button" class="btn" data-act="moreItem" style="justify-content:center">${icon.plus}Ещё вещь</button>
+         <div class="hint" id="itemsTotal"></div>`
+      + `<fieldset class="fieldset"><legend>Оплата сразу</legend>
+          <div class="grid2">${field("Сумма", inp("f-pre", "pre", "", 'inputmode="decimal" placeholder="0"'))}${field("Тип", sel("f-prekind", "kind", Object.entries(PAY_KIND).filter(([k]) => k !== "refund"), existing && existing.paid > 0 ? "final" : "prepay"))}</div>
+          <div class="quick" id="preQuick"><button type="button" data-pct="30">30%</button><button type="button" data-pct="50">50%</button><button type="button" data-pct="100">Вся сумма</button></div>
+          ${field("Способ", sel("f-premethod", "method", PAY_METHOD.map(m => [m, m]), PAY_METHOD[0]))}
+          ${pickerHtml()}</fieldset>`,
+    onSubmit: async (d, f) => {
+      const items = readItems(f);
+      const cl = fixed ? c : await ensureClient(d.client);
+      const purchaseId = fixed ? pid : d.purchaseId;
+      if (fixed && !items.length && !(num(d.pre) > 0)) throw new Error("Добавьте хотя бы одну вещь");
+      if (!purchaseId && !items.length) throw new Error("Выберите закупку или добавьте вещь");
+      if (purchaseId) await ensureMember(cl.id, purchaseId);
+      let t = Date.now();
+      for (const it of items) await Store.put("orders", { id: uid(), clientId: cl.id, purchaseId, ...it, status: "waiting", note: "", createdAt: t++ });
+      if (num(d.pre) > 0) {
+        const photos = await commitPhotos();
+        await Store.put("payments", { id: uid(), clientId: cl.id, purchaseId, amount: num(d.pre), kind: d.kind, method: d.method, date: today(), note: "", photos, createdAt: Date.now() });
+      }
+      toast(items.length ? `${items.length} ${plural(items.length, "вещь добавлена", "вещи добавлены", "вещей добавлено")}` : "Клиент добавлен в закупку");
+      if (!fixed && route().name !== "purchase" && route().name !== "client") go("client-" + cl.id);
+    },
+  });
+  const f = $("#sheet");
+  const total = () => [...f.querySelectorAll("[data-row]")].reduce((a, r) => a + (Math.round(num(r.querySelector('[data-k="qty"]').value)) || 1) * num(r.querySelector('[data-k="price"]').value), 0);
+  const upd = () => { const t = total(); $("#itemsTotal").textContent = t > 0 ? "Вещей на " + money(t) : ""; };
+  f.addEventListener("input", upd);
+  sheetCtx.updItems = upd;
+  initPicker([]);
+  $("#preQuick").addEventListener("click", e => { const b = e.target.closest("[data-pct]"); if (!b) return;
+    const base = total() || (existing ? existing.due : 0);
+    f.pre.value = Math.round(base * b.dataset.pct / 100); });
+}
+
+/* Edit one item */
+function orderForm(o) {
+  const cl = byId("clients", o.clientId);
+  openSheet({
+    title: "Вещь",
+    body: `<div class="note"><b>${esc(cl ? cl.nick : "")}</b></div>`
+      + field("Закупка", sel("f-purchase", "purchaseId", purchaseOptions(o.purchaseId), o.purchaseId || ""))
+      + `<div class="grid2">${field("Артикул", inp("f-article", "article", o.article, 'autocomplete="off"'))}${field("Размер / цвет", inp("f-variant", "variant", o.variant, 'autocomplete="off"'))}</div>`
+      + field("Товар", inp("f-name2", "name", o.name, 'autocomplete="off"'))
+      + `<div class="grid2">${field("Количество", inp("f-qty", "qty", o.qty, 'type="number" min="1" step="1" inputmode="numeric"'))}${field("Цена за шт. *", inp("f-price", "price", o.price, 'inputmode="decimal" required'), `<span id="totalHint"></span>`)}</div>`
+      + field("Статус", sel("f-ostatus", "status", Object.entries(ORDER_STATUS).map(([k, v]) => [k, v[0]]), o.status || "waiting"))
+      + field("Заметка", `<textarea id="f-onote" name="note">${esc(o.note || "")}</textarea>`),
+    del: () => ask(`Удалить вещь <b>${esc(itemLabel(o))}</b>? Оплаты клиента останутся в закупке.`, "Удалить", async () => { await deleteOrder(o); toast("Вещь удалена"); }),
     onSubmit: async d => {
-      const nick = d.client.trim(); if (!nick) throw new Error("Укажите клиента");
       if (!(num(d.price) > 0)) throw new Error("Укажите цену");
-      let c = state.clients.find(x => x.nick.toLowerCase() === nick.toLowerCase());
-      if (!c) { c = { id: uid(), nick, name: "", phone: "", contact: "", note: "", createdAt: Date.now() }; await Store.put("clients", c); }
-      const obj = { ...o, id: o.id || uid(), clientId: c.id, purchaseId: d.purchaseId, article: d.article.trim(), variant: d.variant.trim(), name: d.name.trim(),
-        qty: Math.max(1, Math.round(num(d.qty)) || 1), price: num(d.price), note: d.note.trim(), createdAt: o.createdAt || Date.now() };
-      let photos = [];
-      if (isNew && num(d.pre) > 0) photos = await commitPhotos();
-      await Store.put("orders", obj);
-      if (isNew && num(d.pre) > 0) await Store.put("payments", { id: uid(), orderId: obj.id, amount: num(d.pre), kind: "prepay", method: d.method, date: today(), note: "", photos, createdAt: Date.now() });
-      toast(isNew ? "Заказ добавлен" : "Сохранено");
+      if (d.purchaseId) await ensureMember(o.clientId, d.purchaseId);
+      await Store.put("orders", { ...o, purchaseId: d.purchaseId, article: d.article.trim(), variant: d.variant.trim(), name: d.name.trim(),
+        qty: Math.max(1, Math.round(num(d.qty)) || 1), price: num(d.price), status: d.status, note: d.note.trim() });
+      toast("Сохранено");
     },
   });
   const f = $("#sheet");
   const upd = () => { const t = num(f.qty.value || 1) * num(f.price.value); $("#totalHint").textContent = t > 0 ? "Итого " + money(t) : ""; };
   f.addEventListener("input", upd); upd();
-  if (isNew) {
-    initPicker([]);
-    $("#preQuick").addEventListener("click", e => { const b = e.target.closest("[data-pct]"); if (!b) return;
-      f.pre.value = Math.round(num(f.qty.value || 1) * num(f.price.value) * b.dataset.pct / 100); });
-  }
 }
 
-function paymentForm(p, orderId) {
-  const isNew = !p; const o = byId("orders", p ? p.orderId : orderId); if (!o) return toast("Заказ не найден");
-  const paid = orderPaid(o), t = orderTotal(o), due = Math.max(0, t - paid);
-  p = p || { kind: paid > 0 ? "final" : "prepay", date: today(), method: PAY_METHOD[0], photos: [] };
-  const c = byId("clients", o.clientId);
+function paymentForm(p, share) {
+  const isNew = !p;
+  share = p ? payShare(p) : share;
+  const sh = shareOf(share.clientId, share.purchaseId);
+  const c = byId("clients", share.clientId), pu = byId("purchases", share.purchaseId);
+  const paidOther = sh.paid - (p ? payValue(p) : 0), due = Math.max(0, sh.total - paidOther);
+  p = p || { kind: sh.paid > 0 ? "final" : "prepay", date: today(), method: PAY_METHOD[0], photos: [] };
   openSheet({
     title: isNew ? "Оплата" : "Оплата " + fmtDate(p.date),
-    body: `<div class="note"><b>${esc(c ? c.nick : "")}</b> · ${o.article ? "арт. " + esc(o.article) + " · " : ""}${esc(o.name || "")}<br>Сумма заказа ${money(t)} · внесено ${money(paid)} · <b style="color:var(--due)">осталось ${money(due)}</b></div>`
+    body: `<div class="note"><b>${esc(c ? c.nick : "")}</b> · ${esc(pu ? pu.title : "без закупки")}<br>Вещей на ${money(sh.total)} · внесено ${money(paidOther)} · <b style="color:var(--due)">осталось ${money(due)}</b></div>`
       + `<div class="grid2">${field("Сумма *", inp("f-amount", "amount", p.amount, 'inputmode="decimal" required placeholder="0"'))}${field("Тип", sel("f-kind", "kind", Object.entries(PAY_KIND), p.kind))}</div>`
-      + (isNew ? `<div class="quick" id="payQuick">${due > 0 ? `<button type="button" data-v="${due}">Весь остаток</button>` : ""}<button type="button" data-v="${Math.round(t * .3)}">30%</button><button type="button" data-v="${Math.round(t * .5)}">50%</button></div>` : "")
+      + (isNew ? `<div class="quick" id="payQuick">${due > 0 ? `<button type="button" data-v="${due}">Весь остаток</button>` : ""}<button type="button" data-v="${Math.round(sh.total * .3)}">30%</button><button type="button" data-v="${Math.round(sh.total * .5)}">50%</button></div>` : "")
       + `<div class="grid2">${field("Дата", inp("f-pdate", "date", p.date, 'type="date"'))}${field("Способ", sel("f-method", "method", PAY_METHOD.map(m => [m, m]), p.method))}</div>`
       + field("Комментарий", inp("f-pnote2", "note", p.note, 'autocomplete="off" placeholder="Например: перевод с карты жены"'))
       + pickerHtml(),
@@ -856,7 +967,8 @@ function paymentForm(p, orderId) {
     onSubmit: async d => {
       if (!(num(d.amount) > 0)) throw new Error("Укажите сумму");
       const photos = await commitPhotos();
-      await Store.put("payments", { ...p, id: p.id || uid(), orderId: o.id, amount: num(d.amount), kind: d.kind, date: d.date || today(), method: d.method, note: d.note.trim(), photos, createdAt: p.createdAt || Date.now() });
+      const base = p.orderId ? { orderId: p.orderId } : { clientId: share.clientId, purchaseId: share.purchaseId };
+      await Store.put("payments", { ...p, ...base, id: p.id || uid(), amount: num(d.amount), kind: d.kind, date: d.date || today(), method: d.method, note: d.note.trim(), photos, createdAt: p.createdAt || Date.now() });
       toast(isNew ? "Оплата записана" : "Сохранено");
     },
   });
@@ -869,9 +981,21 @@ function statusPicker(title, map, current, onPick) {
   sheetCtx.onPick = onPick;
 }
 
+/* Deleting one item keeps the money: payments tied to it move to the client's share in that purchase */
 async function deleteOrder(o) {
-  for (const p of orderPays(o)) { for (const id of p.photos || []) Store.delPhoto(id); await Store.remove("payments", p.id); }
+  for (const p of state.payments.filter(x => x.orderId === o.id)) {
+    const { orderId, ...rest } = p;
+    await Store.put("payments", { ...rest, clientId: o.clientId, purchaseId: o.purchaseId || "" });
+  }
   await Store.remove("orders", o.id);
+}
+/* Remove a client's whole participation: items, payments, receipts. purchaseId null = every purchase */
+async function deleteShareData(cid, pid) {
+  const match = s => s.clientId === cid && (pid === null || s.purchaseId === (pid || ""));
+  for (const p of [...state.payments]) if (match(payShare(p))) { for (const id of p.photos || []) Store.delPhoto(id); await Store.remove("payments", p.id); }
+  for (const o of [...state.orders]) if (o.clientId === cid && (pid === null || (o.purchaseId || "") === (pid || ""))) await Store.remove("orders", o.id);
+  for (const pu of state.purchases) if ((pid === null || pu.id === pid) && (pu.members || []).includes(cid))
+    await Store.put("purchases", { ...pu, members: pu.members.filter(x => x !== cid) });
 }
 
 function copyText(text, label = "Скопировано") {
@@ -880,12 +1004,15 @@ function copyText(text, label = "Скопировано") {
 }
 
 function debtsText(p) {
-  const byClient = {};
-  for (const o of purchaseOrders(p.id)) { const d = orderDue(o); if (d > 0.005) (byClient[o.clientId] ||= []).push(o); }
-  const lines = Object.entries(byClient).map(([cid, os]) => { const c = byId("clients", cid);
-    const due = os.reduce((s, o) => s + orderDue(o), 0);
-    return `${c ? c.nick : "?"} — ${money(due)} (${os.map(o => (o.article ? "арт. " + o.article : o.name || "товар") + (num(o.qty) > 1 ? " ×" + o.qty : "")).join(", ")})`; });
+  const lines = purchaseShares(p.id).filter(s => s.due > 0.005).map(s => { const c = byId("clients", s.clientId);
+    return `${c ? c.nick : "?"} — ${money(s.due)} (${s.orders.filter(live).map(o => itemLabel(o) + (num(o.qty) > 1 ? " ×" + o.qty : "")).join(", ")})`; });
   return `${p.title}\nДоплаты:\n${lines.join("\n") || "долгов нет"}`;
+}
+function clientDueText(c) {
+  const shares = clientShares(c.id).filter(s => s.due > 0.005);
+  const total = shares.reduce((a, s) => a + s.due, 0);
+  return `Здравствуйте! Напоминаю про доплату — ${money(total)}:\n` + shares.map(s => { const p = byId("purchases", s.purchaseId);
+    return `${p ? p.title : "Без закупки"}: ${money(s.due)}\n` + s.orders.filter(live).map(o => `• ${itemLabel(o)}${num(o.qty) > 1 ? " ×" + o.qty : ""} — ${money(orderTotal(o))}`).join("\n"); }).join("\n\n");
 }
 
 /* ---------- backup ---------- */
@@ -942,18 +1069,24 @@ function menuSheet() {
 
 /* ---------- demo data (clearly marked) ---------- */
 async function loadDemo() {
-  const p1 = { id: uid(), title: "Пример: Пуховики, ноябрь", factory: "Фабрика Гуанчжоу", date: today(), status: "shipping", note: "Это пример — удалите закупку, когда разберётесь", createdAt: Date.now() };
-  const p2 = { id: uid(), title: "Пример: Сумки, сбор", factory: "Baigou Bags", date: today(), status: "open", note: "", createdAt: Date.now() };
-  const c1 = { id: uid(), nick: "@anna_пример", name: "Анна", phone: "+7 900 000-00-01", contact: "Telegram", note: "", createdAt: Date.now() };
-  const c2 = { id: uid(), nick: "@marina_пример", name: "Марина", phone: "", contact: "Instagram", note: "Просит упаковать в подарок", createdAt: Date.now() };
-  const o1 = { id: uid(), clientId: c1.id, purchaseId: p1.id, article: "PX-2207", name: "Пуховик длинный", variant: "M, чёрный", qty: 1, price: 8900, status: "waiting", note: "", createdAt: Date.now() };
-  const o2 = { id: uid(), clientId: c2.id, purchaseId: p1.id, article: "PX-1180", name: "Пуховик короткий", variant: "S, бежевый", qty: 2, price: 6400, status: "waiting", note: "", createdAt: Date.now() };
-  const o3 = { id: uid(), clientId: c1.id, purchaseId: p2.id, article: "BG-55", name: "Сумка шоппер", variant: "", qty: 1, price: 3200, status: "waiting", note: "", createdAt: Date.now() };
-  for (const x of [p1, p2]) await Store.put("purchases", x);
+  const t = Date.now();
+  const c1 = { id: uid(), nick: "@anna_пример", name: "Анна", phone: "+7 900 000-00-01", contact: "Telegram", note: "", createdAt: t };
+  const c2 = { id: uid(), nick: "@marina_пример", name: "Марина", phone: "", contact: "Instagram", note: "Просит упаковать в подарок", createdAt: t };
+  const p1 = { id: uid(), title: "Пример: Пуховики, ноябрь", factory: "Фабрика Гуанчжоу", date: today(), status: "shipping", note: "Это пример — удалите закупку, когда разберётесь", members: [c1.id, c2.id], createdAt: t };
+  const p2 = { id: uid(), title: "Пример: Сумки, сбор", factory: "Baigou Bags", date: today(), status: "open", note: "", members: [c1.id], createdAt: t };
+  const item = (c, p, article, name, variant, qty, price, n) => ({ id: uid(), clientId: c.id, purchaseId: p.id, article, name, variant, qty, price, status: "waiting", note: "", createdAt: t + n });
+  const orders = [
+    item(c1, p1, "PX-2207", "Пуховик длинный", "M, чёрный", 1, 8900, 1),
+    item(c1, p1, "SC-310", "Шарф", "серый", 2, 900, 2),
+    item(c1, p1, "HT-44", "Шапка", "", 1, 1200, 3),
+    item(c2, p1, "PX-1180", "Пуховик короткий", "S, бежевый", 2, 6400, 4),
+    item(c1, p2, "BG-55", "Сумка шоппер", "", 1, 3200, 5),
+  ];
   for (const x of [c1, c2]) await Store.put("clients", x);
-  for (const x of [o1, o2, o3]) await Store.put("orders", x);
-  await Store.put("payments", { id: uid(), orderId: o1.id, amount: 4450, kind: "prepay", method: "СБП", date: today(), note: "", photos: [], createdAt: Date.now() });
-  await Store.put("payments", { id: uid(), orderId: o2.id, amount: 12800, kind: "prepay", method: "Перевод на карту", date: today(), note: "Оплатила сразу всё", photos: [], createdAt: Date.now() });
+  for (const x of [p1, p2]) await Store.put("purchases", x);
+  for (const x of orders) await Store.put("orders", x);
+  await Store.put("payments", { id: uid(), clientId: c1.id, purchaseId: p1.id, amount: 6000, kind: "prepay", method: "СБП", date: today(), note: "Предоплата за всё", photos: [], createdAt: t });
+  await Store.put("payments", { id: uid(), clientId: c2.id, purchaseId: p1.id, amount: 12800, kind: "prepay", method: "Перевод на карту", date: today(), note: "Оплатила сразу всё", photos: [], createdAt: t });
   toast("Пример добавлен — его можно удалить");
 }
 
@@ -978,10 +1111,10 @@ const actions = {
   demo: () => loadDemo(),
   quickAdd: () => {
     const r = route();
-    if (r.name === "client") return orderForm(null, { client: r.id });
-    if (r.name === "purchase") return orderForm(null, { purchase: r.id });
+    if (r.name === "client") return shareForm({ client: r.id });
+    if (r.name === "purchase") return shareForm({ purchase: r.id });
     openSheet({ title: "Добавить", body: `<div class="list">
-      <button type="button" class="row" data-act="newOrder"><div class="row-main"><div class="row-title">Заказ клиента</div><div class="row-sub">Клиент записался на товар</div></div></button>
+      <button type="button" class="row" data-act="newShare"><div class="row-main"><div class="row-title">Клиента в закупку</div><div class="row-sub">Клиент и вещи, которые он берёт</div></div></button>
       <button type="button" class="row" data-act="newPurchase"><div class="row-main"><div class="row-title">Закупка</div><div class="row-sub">Новый заказ на фабрике</div></div></button>
       <button type="button" class="row" data-act="newClient"><div class="row-main"><div class="row-title">Клиент</div><div class="row-sub">Ник, телефон, заметки</div></div></button></div>` });
   },
@@ -989,12 +1122,21 @@ const actions = {
   editClient: el => clientForm(byId("clients", el.dataset.id)),
   newPurchase: () => purchaseForm(),
   editPurchase: el => purchaseForm(byId("purchases", el.dataset.id)),
-  newOrder: el => orderForm(null, { client: el.dataset.client, purchase: el.dataset.purchase }),
+  newShare: el => shareForm({ client: el.dataset.client, purchase: el.dataset.purchase }),
+  addItems: el => shareForm({ client: el.dataset.client, purchase: el.dataset.purchase }),
+  moreItem: () => { $("#itemRows").insertAdjacentHTML("beforeend", itemRowHtml()); const rows = document.querySelectorAll("#itemRows [data-row]"); rows[rows.length - 1].querySelector("input").focus(); },
+  dropItem: el => { const rows = document.querySelectorAll("#itemRows [data-row]"); const row = el.closest("[data-row]");
+    if (rows.length > 1) row.remove(); else row.querySelectorAll("input").forEach(i => i.value = i.dataset.k === "qty" ? "1" : "");
+    if (sheetCtx && sheetCtx.updItems) sheetCtx.updItems(); },
   editOrder: el => orderForm(byId("orders", el.dataset.id)),
-  newPayment: el => paymentForm(null, el.dataset.order),
+  newPayment: el => paymentForm(null, { clientId: el.dataset.client, purchaseId: el.dataset.purchase }),
+  shareStatus: el => { const sh = shareOf(el.dataset.client, el.dataset.purchase);
+    statusPicker("Статус всех вещей клиента", ORDER_STATUS, sh.orders.every(o => o.status === sh.orders[0].status) ? sh.orders[0].status : "",
+      async v => { for (const o of sh.orders) if (o.status !== v) await Store.put("orders", { ...o, status: v }); }); },
+  removeShare: el => { const cid = el.dataset.client, pid = el.dataset.purchase; const c = byId("clients", cid), p = byId("purchases", pid);
+    ask(`Убрать <b>${esc(c ? c.nick : "клиента")}</b> из ${p ? "закупки «" + esc(p.title) + "»" : "списка без закупки"}? Его вещи, оплаты и чеки в ней удалятся.`, "Убрать",
+      async () => { await deleteShareData(cid, pid); toast("Клиент убран из закупки"); }); },
   editPayment: el => { const p = byId("payments", el.dataset.id); if (p) paymentForm(p); },
-  orderStatus: el => { const o = byId("orders", el.dataset.id);
-    statusPicker("Статус заказа", ORDER_STATUS, o.status, v => Store.put("orders", { ...o, status: v })); },
   purchaseStatus: el => { const p = byId("purchases", el.dataset.id);
     statusPicker("Статус закупки", PURCHASE_STATUS, p.status, v => Store.put("purchases", { ...p, status: v })); },
   pickStatus: el => { const f = sheetCtx.onPick; closeSheet(); f(el.dataset.v); toast("Статус обновлён"); },
@@ -1002,10 +1144,7 @@ const actions = {
     for (const o of purchaseOrders(p.id)) if (o.status === "waiting") await Store.put("orders", { ...o, status: "arrived" });
     await Store.put("purchases", { ...p, status: "arrived" }); toast("Отмечено: товар пришёл"); },
   copyDebts: el => copyText(debtsText(byId("purchases", el.dataset.id)), "Список доплат скопирован"),
-  copyClientDue: el => { const c = byId("clients", el.dataset.id);
-    const os = clientOrders(c.id).filter(o => orderDue(o) > 0.005);
-    const total = os.reduce((s, o) => s + orderDue(o), 0);
-    copyText(`Здравствуйте! Напоминаю про доплату — ${money(total)}:\n` + os.map(o => `• ${o.article ? "арт. " + o.article + " " : ""}${o.name || ""}${o.variant ? " (" + o.variant + ")" : ""}: ${money(orderDue(o))}`).join("\n"), "Текст скопирован"); },
+  copyClientDue: el => copyText(clientDueText(byId("clients", el.dataset.id)), "Текст скопирован"),
   copy: el => copyText(el.dataset.text),
   clientSort: el => { ui.clientSort = el.dataset.v; render(); },
   onlyDue: () => { ui.onlyDue = !ui.onlyDue; render(); },
