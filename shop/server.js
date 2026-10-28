@@ -6,9 +6,12 @@ import crypto from 'node:crypto';
 import express from 'express';
 import multer from 'multer';
 import sharp from 'sharp';
-import { PORT, ADMIN_PASSWORD, SESSION_SECRET, UPLOAD_DIR, TG_BOT_TOKEN, TG_CHAT_ID } from './config.js';
+import { PORT, ADMIN_PASSWORD, SESSION_SECRET, UPLOAD_DIR } from './config.js';
 import * as db from './db.js';
-import * as views from './views.js';
+import { settings, updateSettings, SETTING_KEYS } from './settings.js';
+import * as site from './views/public.js';
+import * as admin from './views/admin.js';
+import { finalPrice, choiceText, productName } from './views/common.js';
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
@@ -64,39 +67,46 @@ const loginAttempts = new Map();
 
 // ---------- Помощники ----------
 
-const str = (v, max = 500) => String(v ?? '').trim().slice(0, max);
+const str = (v, max = 500) => String([v].flat()[0] ?? '').trim().slice(0, max);
 const num = (v) => {
-  const n = Number(String(v ?? '').replace(',', '.'));
+  const n = Number(str(v).replace(',', '.'));
   return Number.isFinite(n) && n >= 0 ? n : 0;
 };
-const ids = (v) => [v].flat().map(Number).filter((n) => Number.isInteger(n) && n > 0);
+const ids = (v) => [v].flat().flatMap((x) => String(x ?? '').split(',')).map(Number).filter((n) => Number.isInteger(n) && n > 0);
 const list = (s) => [...new Set(String(s ?? '').split(/[,;\n]/).map((x) => x.trim()).filter(Boolean))];
 const safeBack = (b, fallback) => (typeof b === 'string' && /^\/[^/\\]/.test(b) ? b : fallback);
+const withMsg = (url, msg) => {
+  const [base, hash] = url.split('#');
+  return `${base}${base.includes('?') ? '&' : '?'}msg=${encodeURIComponent(msg)}${hash ? `#${hash}` : ''}`;
+};
+const contactKey = (c) => String(c ?? '').trim().toLowerCase();
 
 // Размеры, цвета и «Название: значения» построчно → [{ name, values }]
 function parseOptions(body, { keepEmpty = false } = {}) {
   const options = [];
-  const sizes = list(body.sizes);
-  const colors = list(body.colors);
+  const sizes = list(str(body.sizes));
+  const colors = list(str(body.colors));
   if (sizes.length || keepEmpty) options.push({ name: 'Размер', values: sizes });
   if (colors.length || keepEmpty) options.push({ name: 'Цвет', values: colors });
-  for (const line of String(body.extra ?? '').split('\n')) {
+  for (const line of str(body.extra, 5000).split('\n')) {
     const i = line.indexOf(':');
     if (i <= 0) continue;
     const name = line.slice(0, i).trim().slice(0, 50);
-    const values = list(line.slice(i + 1).replace(/\n/g, ''));
+    const values = list(line.slice(i + 1));
     if (name && values.length && !options.some((o) => o.name === name)) options.push({ name, values });
   }
   return keepEmpty ? options : options.filter((o) => o.values.length);
 }
 
-function purchaseData(body) {
+function purchaseData(body, current = {}) {
+  const status = str(body.status);
   return {
     title: str(body.title, 200) || 'Без названия',
     description: str(body.description, 5000),
-    status: body.status in db.PURCHASE_STATUSES ? body.status : 'draft',
-    deadline: /^\d{4}-\d{2}-\d{2}$/.test(body.deadline) ? body.deadline : '',
+    status: status in db.PURCHASE_STATUSES ? status : (current.status ?? 'draft'),
+    deadline: /^\d{4}-\d{2}-\d{2}$/.test(str(body.deadline)) ? str(body.deadline) : '',
     org_fee: Math.min(num(body.org_fee), 1000),
+    pay_info: str(body.pay_info, 2000),
   };
 }
 
@@ -134,22 +144,50 @@ function sendCsv(res, filename, rows) {
   res.send(csv(rows));
 }
 
-function notifyTelegram(textMsg) {
-  if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
-  fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: TG_CHAT_ID, text: textMsg }),
-    signal: AbortSignal.timeout(10000),
-  }).catch((e) => console.error('Telegram:', e.message));
+async function notifyTelegram(textMsg) {
+  const { tg_bot_token: token, tg_chat_id: chat } = settings();
+  if (!token || !chat) return false;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, text: textMsg }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!r.ok) console.error('Telegram:', r.status, await r.text());
+    return r.ok;
+  } catch (e) {
+    console.error('Telegram:', e.message);
+    return false;
+  }
 }
 
-const notFound = (res, msg = 'Страница не найдена.') => res.status(404).send(String(views.errorPage(404, msg)));
+// Клиенты из записей: группировка по контакту, суммы с орг. сбором
+function aggregateClients(signups) {
+  const map = new Map();
+  for (const s of signups) {
+    if (s.status === 'cancelled') continue;
+    const key = contactKey(s.contact) || `name:${s.name.toLowerCase()}`;
+    if (!map.has(key)) map.set(key, { key, name: s.name, contact: s.contact, items: 0, sum: 0, paid: 0, purchaseIds: new Set(), last: 0 });
+    const c = map.get(key);
+    const sum = finalPrice(s.price, s.org_fee) * s.qty;
+    c.items += s.qty;
+    c.sum += sum;
+    if (s.status === 'paid' || s.status === 'delivered') c.paid += sum;
+    c.purchaseIds.add(s.purchase_id);
+    if (s.created_at > c.last) { c.last = s.created_at; c.name = s.name; }
+  }
+  return [...map.values()].map((c) => ({ ...c, purchases: c.purchaseIds.size }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+}
+
 const page = (res, v) => res.send(String(v));
+const myCount = (req) => db.listClientSignups(req.clientId).filter((s) => s.status !== 'cancelled').length;
+const notFound = (res, msg = 'Страница не найдена.') => res.status(404).send(String(site.errorPage(404, msg)));
 
 // ---------- Клиентская часть ----------
 
-app.get('/', (req, res) => page(res, views.homePage(db.listPurchases({ publicOnly: true }))));
+app.get('/', (req, res) => page(res, site.homePage({ purchases: db.listPurchases({ publicOnly: true }), myCount: myCount(req) })));
 
 function visiblePurchase(id, req) {
   const p = db.getPurchase(Number(id));
@@ -161,12 +199,24 @@ function visiblePurchase(id, req) {
 app.get('/p/:id', (req, res) => {
   const purchase = visiblePurchase(req.params.id, req);
   if (!purchase) return notFound(res, 'Закупка не найдена или ещё не открыта.');
-  page(res, views.purchasePage({
+  page(res, site.purchasePage({ purchase, products: db.listProducts(purchase.id, { publicOnly: true }), myCount: myCount(req) }));
+});
+
+app.get('/p/:id/item/:productId', (req, res) => {
+  const purchase = visiblePurchase(req.params.id, req);
+  if (!purchase) return notFound(res, 'Закупка не найдена или ещё не открыта.');
+  const products = db.listProducts(purchase.id, { publicOnly: true });
+  const i = products.findIndex((p) => p.id === Number(req.params.productId));
+  if (i < 0) return notFound(res, 'Товар не найден.');
+  page(res, site.productPage({
     purchase,
-    products: db.listProducts(purchase.id, { publicOnly: true }),
+    product: products[i],
+    prev: products[i - 1],
+    next: products[i + 1],
     clientId: req.clientId,
     ok: req.query.ok,
     error: str(req.query.error, 200),
+    myCount: myCount(req),
   }));
 });
 
@@ -176,14 +226,13 @@ app.post('/p/:id/item/:productId/signup', (req, res) => {
   const purchase = visiblePurchase(req.params.id, req);
   const product = db.getProduct(Number(req.params.productId));
   if (!purchase || !product || product.purchase_id !== purchase.id || product.hidden) return notFound(res);
-  const back = (q) => res.redirect(`/p/${purchase.id}?${q}#item-${product.id}`);
-  const fail = (msg) => back(`error=${encodeURIComponent(msg)}`);
+  const base = `/p/${purchase.id}/item/${product.id}`;
+  const fail = (msg) => res.redirect(`${base}?error=${encodeURIComponent(msg)}#signup`);
 
   // Не больше 30 записей за 10 минут с одного адреса
-  const key = req.ip;
-  const hits = (signupHits.get(key) || []).filter((t) => t > Date.now() - 600_000);
+  const hits = (signupHits.get(req.ip) || []).filter((t) => t > Date.now() - 600_000);
   if (hits.length >= 30) return fail('Слишком много записей подряд, попробуйте позже.');
-  signupHits.set(key, [...hits, Date.now()]);
+  signupHits.set(req.ip, [...hits, Date.now()]);
 
   if (purchase.status !== 'open') return fail('Запись в эту закупку закрыта.');
   const name = str(req.body.name, 60);
@@ -204,10 +253,10 @@ app.post('/p/:id/item/:productId/signup', (req, res) => {
   });
   if (!created) return fail('Столько штук уже нет — уменьшите количество.');
 
-  notifyTelegram(`🛍 Новая запись — ${purchase.title}\n${product.title || product.article || `Товар №${product.id}`}`
-    + `${Object.keys(choice).length ? `\n${views.choiceText(choice)}` : ''} × ${qty}\n${name}, ${contact}`
+  notifyTelegram(`🛍 Новая запись — ${purchase.title}\n${productName(product)}`
+    + `${Object.keys(choice).length ? `\n${choiceText(choice)}` : ''} × ${qty}\n${name}, ${contact}`
     + `${req.body.comment ? `\n💬 ${str(req.body.comment)}` : ''}`);
-  back('ok=1');
+  res.redirect(`${base}?ok=1#signup`);
 });
 
 app.post('/signup/:id/cancel', (req, res) => {
@@ -216,26 +265,25 @@ app.post('/signup/:id/cancel', (req, res) => {
   const product = db.getProduct(s.product_id);
   const purchase = db.getPurchase(product.purchase_id);
   if (purchase.status === 'open') db.setSignupStatus([s.id], 'cancelled');
-  res.redirect(safeBack(req.body.back, `/p/${purchase.id}#item-${product.id}`));
+  res.redirect(safeBack(req.body.back, `/p/${purchase.id}/item/${product.id}`));
 });
 
-app.get('/my', (req, res) => page(res, views.myPage(db.listClientSignups(req.clientId))));
+app.get('/my', (req, res) => page(res, site.myPage({ signups: db.listClientSignups(req.clientId) })));
 
-// ---------- Админка ----------
+// ---------- Вход в админку ----------
 
-app.get('/admin/login', (req, res) => page(res, views.loginPage('', !ADMIN_PASSWORD)));
+app.get('/admin/login', (req, res) => page(res, admin.loginPage('', !ADMIN_PASSWORD)));
 
 app.post('/admin/login', (req, res) => {
-  const key = req.ip;
-  const tries = (loginAttempts.get(key) || []).filter((t) => t > Date.now() - 900_000);
-  if (tries.length >= 10) return page(res.status(429), views.loginPage('Слишком много попыток. Подождите 15 минут.'));
-  const given = crypto.createHash('sha256').update(String(req.body.password ?? '')).digest();
+  const tries = (loginAttempts.get(req.ip) || []).filter((t) => t > Date.now() - 900_000);
+  if (tries.length >= 10) return page(res.status(429), admin.loginPage('Слишком много попыток. Подождите 15 минут.'));
+  const given = crypto.createHash('sha256').update(str(req.body.password, 200)).digest();
   const real = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
   if (!ADMIN_PASSWORD || !crypto.timingSafeEqual(given, real)) {
-    loginAttempts.set(key, [...tries, Date.now()]);
-    return page(res.status(401), views.loginPage('Неверный пароль.', !ADMIN_PASSWORD));
+    loginAttempts.set(req.ip, [...tries, Date.now()]);
+    return page(res.status(401), admin.loginPage('Неверный пароль.', !ADMIN_PASSWORD));
   }
-  loginAttempts.delete(key);
+  loginAttempts.delete(req.ip);
   const exp = String(Date.now() + 30 * 86400_000);
   setCookie(res, 'admin', `${exp}.${sign(`admin:${exp}`)}`, 30);
   res.redirect('/admin');
@@ -247,70 +295,176 @@ app.post('/admin/logout', (req, res) => {
 });
 
 app.use('/admin', (req, res, next) => {
-  if (isAdmin(req)) return next();
+  if (isAdmin(req)) {
+    // Данные бокового меню
+    req.nav = {
+      purchases: db.listPurchases().filter((p) => p.status !== 'archive'),
+      newSignups: db.dashboardStats().newSignups,
+    };
+    return next();
+  }
+  if (req.path.startsWith('/api/')) return res.status(403).json({ error: 'Войдите в админку заново' });
   if (req.method === 'GET') return res.redirect('/admin/login');
   res.status(403).send('Войдите в админку заново');
 });
 
-app.get('/admin', (req, res) => page(res, views.dashboardPage(db.listPurchases())));
+const adminNotFound = (req, res, msg) => res.status(404).send(String(admin.errorPage(404, msg, req.nav)));
 
-app.post('/admin/purchase', (req, res) => {
+// ---------- Главная, закупки ----------
+
+app.get('/admin', (req, res) => {
+  page(res, admin.dashboardPage({
+    nav: req.nav,
+    stats: db.dashboardStats(),
+    purchases: db.listPurchases(),
+    recent: db.searchSignups({ limit: 15 }),
+  }));
+});
+
+app.get('/admin/purchases', (req, res) => {
+  const status = str(req.query.status);
+  page(res, admin.purchasesPage({ nav: req.nav, purchases: db.listPurchases(), status: status in db.PURCHASE_STATUSES ? status : '' }));
+});
+
+app.get('/admin/purchases/new', (req, res) => page(res, admin.newPurchasePage({ nav: req.nav })));
+
+app.post('/admin/purchases', (req, res) => {
   const id = db.createPurchase(purchaseData(req.body));
-  res.redirect(`/admin/purchase/${id}`);
+  res.redirect(withMsg(`/admin/purchase/${id}/products`, 'Закупка создана. Загрузите фото каталога.'));
 });
 
 function adminPurchase(req, res) {
   const p = db.getPurchase(Number(req.params.id));
-  if (!p) notFound(res, 'Закупка не найдена.');
+  if (!p) adminNotFound(req, res, 'Закупка не найдена.');
   return p;
 }
 
 function adminProduct(req, res) {
   const p = db.getProduct(Number(req.params.id));
-  if (!p) notFound(res, 'Товар не найден.');
+  if (!p) adminNotFound(req, res, 'Товар не найден.');
   return p;
+}
+
+// Счётчики для вкладок закупки
+function purchaseCounts(purchaseId, signups) {
+  const statuses = { '': signups.length };
+  for (const s of signups) statuses[s.status] = (statuses[s.status] || 0) + 1;
+  return {
+    products: db.listProducts(purchaseId).length,
+    signups: signups.filter((s) => s.status !== 'cancelled').length,
+    statuses,
+  };
 }
 
 app.get('/admin/purchase/:id', (req, res) => {
   const purchase = adminPurchase(req, res);
+  if (purchase) res.redirect(`/admin/purchase/${purchase.id}/products`);
+});
+
+app.get('/admin/purchase/:id/products', (req, res) => {
+  const purchase = adminPurchase(req, res);
   if (!purchase) return;
-  page(res, views.purchaseAdminPage({ purchase, products: db.listProducts(purchase.id), msg: str(req.query.msg, 200) }));
+  const signups = db.searchSignups({ purchaseId: purchase.id });
+  page(res, admin.productsTab({
+    nav: req.nav, purchase, products: db.listProducts(purchase.id), counts: purchaseCounts(purchase.id, signups), msg: str(req.query.msg, 200),
+  }));
+});
+
+app.get('/admin/purchase/:id/signups', (req, res) => {
+  const purchase = adminPurchase(req, res);
+  if (!purchase) return;
+  const all = db.searchSignups({ purchaseId: purchase.id });
+  const status = str(req.query.status);
+  const q = str(req.query.q, 100);
+  const signups = status || q ? db.searchSignups({ purchaseId: purchase.id, status, q }) : all;
+  page(res, admin.signupsTab({
+    nav: req.nav, purchase, signups, counts: purchaseCounts(purchase.id, all), status, q, msg: str(req.query.msg, 200),
+  }));
+});
+
+app.get('/admin/purchase/:id/factory', (req, res) => {
+  const purchase = adminPurchase(req, res);
+  if (!purchase) return;
+  const signups = db.searchSignups({ purchaseId: purchase.id }).reverse();
+  page(res, admin.factoryTab({ nav: req.nav, purchase, signups, counts: purchaseCounts(purchase.id, signups) }));
+});
+
+app.get('/admin/purchase/:id/clients', (req, res) => {
+  const purchase = adminPurchase(req, res);
+  if (!purchase) return;
+  const signups = db.searchSignups({ purchaseId: purchase.id });
+  page(res, admin.clientsTab({
+    nav: req.nav, purchase, clients: aggregateClients(signups), counts: purchaseCounts(purchase.id, signups), msg: str(req.query.msg, 200),
+  }));
+});
+
+app.get('/admin/purchase/:id/settings', (req, res) => {
+  const purchase = adminPurchase(req, res);
+  if (!purchase) return;
+  const signups = db.searchSignups({ purchaseId: purchase.id });
+  page(res, admin.settingsTab({ nav: req.nav, purchase, counts: purchaseCounts(purchase.id, signups), msg: str(req.query.msg, 200) }));
 });
 
 app.post('/admin/purchase/:id', (req, res) => {
   const purchase = adminPurchase(req, res);
   if (!purchase) return;
-  db.updatePurchase(purchase.id, purchaseData(req.body));
-  res.redirect(`/admin/purchase/${purchase.id}?msg=${encodeURIComponent('Сохранено')}`);
+  db.updatePurchase(purchase.id, purchaseData(req.body, purchase));
+  res.redirect(withMsg(`/admin/purchase/${purchase.id}/settings`, 'Сохранено'));
+});
+
+app.post('/admin/api/purchase/:id/status', (req, res) => {
+  const purchase = db.getPurchase(Number(req.params.id));
+  const status = str(req.body.status);
+  if (!purchase || !(status in db.PURCHASE_STATUSES)) return res.status(400).json({ error: 'Неверный статус' });
+  db.setPurchaseStatus(purchase.id, status);
+  res.json({ ok: true, message: `Статус: ${db.PURCHASE_STATUSES[status]}` });
+});
+
+app.post('/admin/api/purchase/:id/order', (req, res) => {
+  const purchase = db.getPurchase(Number(req.params.id));
+  if (!purchase) return res.status(404).json({ error: 'Закупка не найдена' });
+  db.reorderProducts(purchase.id, ids(req.body.ids));
+  res.json({ ok: true, message: 'Порядок сохранён' });
+});
+
+app.post('/admin/purchase/:id/client-paid', (req, res) => {
+  const purchase = adminPurchase(req, res);
+  if (!purchase) return;
+  const key = str(req.body.contact, 100);
+  const toPay = db.searchSignups({ purchaseId: purchase.id })
+    .filter((s) => (contactKey(s.contact) || `name:${s.name.toLowerCase()}`) === key && ['new', 'confirmed'].includes(s.status));
+  db.setSignupStatus(toPay.map((s) => s.id), 'paid');
+  res.redirect(withMsg(`/admin/purchase/${purchase.id}/clients`, `Отмечено оплаченными: ${toPay.length}`));
 });
 
 app.post('/admin/purchase/:id/duplicate', (req, res) => {
   const purchase = adminPurchase(req, res);
   if (!purchase) return;
   const id = db.duplicatePurchase(purchase.id);
-  res.redirect(`/admin/purchase/${id}?msg=${encodeURIComponent('Копия создана (черновик). Поменяйте название и статус.')}`);
+  res.redirect(withMsg(`/admin/purchase/${id}/settings`, 'Копия создана (черновик). Поменяйте название и даты.'));
 });
 
 app.post('/admin/purchase/:id/delete', (req, res) => {
   const purchase = adminPurchase(req, res);
   if (!purchase) return;
   removeFiles(db.deletePurchase(purchase.id));
-  res.redirect('/admin');
+  res.redirect('/admin/purchases');
 });
 
+// Загрузка фото каталога. Из админки фото приходят частями (fetch), ответ — JSON
 app.post('/admin/purchase/:id/upload', upload.array('photos'), async (req, res) => {
-  const purchase = adminPurchase(req, res);
-  if (!purchase) return;
+  const purchase = db.getPurchase(Number(req.params.id));
+  if (!purchase) return res.status(404).json({ error: 'Закупка не найдена' });
   const files = (req.files || []).sort((a, b) => a.originalname.localeCompare(b.originalname, 'ru', { numeric: true }));
-  if (!files.length) return res.redirect(`/admin/purchase/${purchase.id}?msg=${encodeURIComponent('Не выбрано ни одного фото')}`);
   const defaults = { price: num(req.body.price), options: parseOptions(req.body) };
   // multer отдаёт имя файла в latin1
   const stem = (f) => Buffer.from(f.originalname, 'latin1').toString('utf8').replace(/\.[^.]+$/, '').slice(0, 100);
   const article = (f) => (req.body.article_from_name ? stem(f) : '');
 
+  // В режиме «один товар» следующие части догружаются в уже созданный товар
+  let productId = Number(req.body.product_id) || null;
+  if (productId && db.getProduct(productId)?.purchase_id !== purchase.id) productId = null;
   let saved = 0;
-  let productId = null;
-  let firstId = null;
   for (const f of files) {
     let photo;
     try {
@@ -321,54 +475,50 @@ app.post('/admin/purchase/:id/upload', upload.array('photos'), async (req, res) 
     }
     if (req.body.mode !== 'one' || !productId) {
       productId = db.createProduct(purchase.id, { ...defaults, article: article(f) });
-      firstId ??= productId;
     }
     db.addPhoto(productId, photo.file, photo.thumb);
     saved++;
   }
-  const failed = files.length - saved;
-  const msg = `Загружено фото: ${saved}${failed ? `, не удалось: ${failed}` : ''}`;
-  res.redirect(`/admin/purchase/${purchase.id}?msg=${encodeURIComponent(msg)}${firstId ? `#item-${firstId}` : ''}`);
+  res.json({ saved, failed: files.length - saved, productId });
 });
 
 app.post('/admin/purchase/:id/bulk', (req, res) => {
   const purchase = adminPurchase(req, res);
   if (!purchase) return;
   const selected = ids(req.body.ids).filter((id) => db.getProduct(id)?.purchase_id === purchase.id);
-  const go = (msg) => res.redirect(`/admin/purchase/${purchase.id}?msg=${encodeURIComponent(msg)}`);
+  const back = `/admin/purchase/${purchase.id}/products`;
+  const go = (msg) => res.redirect(withMsg(back, msg));
   if (!selected.length) return go('Не выбрано ни одного товара');
-  if (req.body.action === 'delete') {
+  const action = str(req.body.action);
+  if (action === 'delete') {
     removeFiles(db.deleteProducts(selected));
     return go(`Удалено товаров: ${selected.length}`);
   }
-  if (req.body.action === 'merge') {
+  if (action === 'merge') {
     if (selected.length < 2) return go('Для объединения выберите хотя бы два товара');
     const id = db.mergeProducts(selected);
-    return res.redirect(`/admin/product/${id}?msg=${encodeURIComponent('Товары объединены')}`);
+    return res.redirect(withMsg(`/admin/product/${id}`, 'Товары объединены'));
+  }
+  if (action === 'hide' || action === 'show') {
+    db.bulkUpdateProducts(selected, { hidden: action === 'hide' ? 1 : 0 });
+    return go(action === 'hide' ? `Скрыто товаров: ${selected.length}` : `Показано товаров: ${selected.length}`);
   }
   const options = parseOptions(req.body);
   db.bulkUpdateProducts(selected, {
     price: str(req.body.price) ? num(req.body.price) : undefined,
     options: options.length ? options : undefined,
-    hidden: req.body.hidden === '1' ? 1 : req.body.hidden === '0' ? 0 : undefined,
     description: str(req.body.description) ? str(req.body.description, 5000) : undefined,
   });
   go(`Изменено товаров: ${selected.length}`);
-});
-
-app.get('/admin/purchase/:id/signups', (req, res) => {
-  const purchase = adminPurchase(req, res);
-  if (!purchase) return;
-  page(res, views.signupsAdminPage({ purchase, signups: db.listPurchaseSignups(purchase.id), msg: str(req.query.msg, 200) }));
 });
 
 app.get('/admin/purchase/:id/signups.csv', (req, res) => {
   const purchase = adminPurchase(req, res);
   if (!purchase) return;
   const rows = [['№', 'Дата', 'Товар', 'Артикул', 'Параметры', 'Кол-во', 'Цена клиенту', 'Сумма', 'Имя', 'Контакт', 'Комментарий', 'Статус', 'Заметка']];
-  for (const s of db.listPurchaseSignups(purchase.id)) {
-    const price = views.finalPrice(s.price, purchase.org_fee);
-    rows.push([s.id, new Date(s.created_at).toLocaleString('ru-RU'), s.product_title, s.article, views.choiceText(s.choice),
+  for (const s of db.searchSignups({ purchaseId: purchase.id }).reverse()) {
+    const price = finalPrice(s.price, purchase.org_fee);
+    rows.push([s.id, new Date(s.created_at).toLocaleString('ru-RU'), s.product_title, s.article, choiceText(s.choice),
       s.qty, price, price * s.qty, s.name, s.contact, s.comment, db.SIGNUP_STATUSES[s.status], s.note]);
   }
   sendCsv(res, `Записи — ${purchase.title}.csv`, rows);
@@ -378,71 +528,63 @@ app.get('/admin/purchase/:id/factory.csv', (req, res) => {
   const purchase = adminPurchase(req, res);
   if (!purchase) return;
   const summary = new Map();
-  for (const s of db.listPurchaseSignups(purchase.id)) {
+  for (const s of db.searchSignups({ purchaseId: purchase.id }).reverse()) {
     if (s.status === 'cancelled') continue;
-    const key = `${s.product_id}|${views.choiceText(s.choice)}`;
+    const key = `${s.product_id}|${choiceText(s.choice)}`;
     if (!summary.has(key)) summary.set(key, { s, qty: 0 });
     summary.get(key).qty += s.qty;
   }
   const rows = [['Товар', 'Артикул', 'Параметры', 'Кол-во', 'Цена', 'Сумма']];
   for (const { s, qty } of [...summary.values()].sort((a, b) => a.s.product_id - b.s.product_id)) {
-    rows.push([s.product_title, s.article, views.choiceText(s.choice), qty, s.price, s.price * qty]);
+    rows.push([s.product_title, s.article, choiceText(s.choice), qty, s.price, s.price * qty]);
   }
   sendCsv(res, `Заказ фабрике — ${purchase.title}.csv`, rows);
 });
 
-// ----- Товар -----
+// ---------- Товар ----------
 
 app.get('/admin/product/:id', (req, res) => {
   const product = adminProduct(req, res);
   if (!product) return;
   const purchase = db.getPurchase(product.purchase_id);
-  const signups = db.listPurchaseSignups(purchase.id).filter((s) => s.product_id === product.id);
-  page(res, views.productAdminPage({ product, purchase, signups, msg: str(req.query.msg, 200) }));
+  const products = db.listProducts(purchase.id);
+  const i = products.findIndex((p) => p.id === product.id);
+  page(res, admin.productPage({
+    nav: req.nav,
+    product,
+    purchase,
+    signups: db.searchSignups({ purchaseId: purchase.id }).filter((s) => s.product_id === product.id),
+    prev: products[i - 1],
+    next: products[i + 1],
+    msg: str(req.query.msg, 200),
+  }));
 });
-
-function productData(body, current) {
-  const full = body.full === '1'; // полная форма товара, а не быстрая из списка
-  return {
-    title: str(body.title, 200),
-    article: str(body.article, 100),
-    description: full ? str(body.description, 5000) : current.description,
-    price: num(body.price),
-    max_qty: full ? (Math.floor(num(body.max_qty)) || null) : current.max_qty,
-    hidden: full ? !!body.hidden : current.hidden,
-  };
-}
 
 app.post('/admin/product/:id', (req, res) => {
   const product = adminProduct(req, res);
   if (!product) return;
-  db.updateProduct(product.id, { ...productData(req.body, product), options: parseOptions(req.body) });
-  res.redirect(`/admin/product/${product.id}?msg=${encodeURIComponent('Сохранено')}`);
-});
-
-// Быстрое сохранение из списка товаров: размеры/цвета меняются, прочие параметры остаются
-app.post('/admin/product/:id/quick', (req, res) => {
-  const product = adminProduct(req, res);
-  if (!product) return;
-  const incoming = parseOptions({ sizes: req.body.sizes, colors: req.body.colors }, { keepEmpty: true });
-  const others = product.options.filter((o) => o.name !== 'Размер' && o.name !== 'Цвет');
-  const options = [...incoming.filter((o) => o.values.length), ...others];
-  db.updateProduct(product.id, { ...productData(req.body, product), options });
-  res.redirect(`/admin/purchase/${product.purchase_id}?msg=${encodeURIComponent('Товар сохранён')}#item-${product.id}`);
-});
-
-app.post('/admin/product/:id/move', (req, res) => {
-  const product = adminProduct(req, res);
-  if (!product) return;
-  db.moveProduct(product.id, Number(req.body.dir) < 0 ? -1 : 1);
-  res.redirect(`/admin/purchase/${product.purchase_id}#item-${product.id}`);
+  db.updateProduct(product.id, {
+    title: str(req.body.title, 200),
+    article: str(req.body.article, 100),
+    description: str(req.body.description, 5000),
+    price: num(req.body.price),
+    max_qty: Math.floor(num(req.body.max_qty)) || null,
+    hidden: !!req.body.hidden,
+    options: parseOptions(req.body),
+  });
+  if (req.body.then === 'next') {
+    const products = db.listProducts(product.purchase_id);
+    const next = products[products.findIndex((p) => p.id === product.id) + 1];
+    if (next) return res.redirect(withMsg(`/admin/product/${next.id}`, 'Предыдущий товар сохранён'));
+  }
+  res.redirect(withMsg(`/admin/product/${product.id}`, 'Сохранено'));
 });
 
 app.post('/admin/product/:id/delete', (req, res) => {
   const product = adminProduct(req, res);
   if (!product) return;
   removeFiles(db.deleteProducts([product.id]));
-  res.redirect(`/admin/purchase/${product.purchase_id}?msg=${encodeURIComponent('Товар удалён')}`);
+  res.redirect(withMsg(`/admin/purchase/${product.purchase_id}/products`, 'Товар удалён'));
 });
 
 app.post('/admin/product/:id/photos', upload.array('photos'), async (req, res) => {
@@ -458,32 +600,8 @@ app.post('/admin/product/:id/photos', upload.array('photos'), async (req, res) =
       console.error('Фото не сохранено:', f.originalname, e.message);
     }
   }
-  res.redirect(`/admin/product/${product.id}?msg=${encodeURIComponent(`Добавлено фото: ${saved}`)}`);
+  res.redirect(withMsg(`/admin/product/${product.id}`, `Добавлено фото: ${saved}`));
 });
-
-app.post('/admin/product/:id/signup', (req, res) => {
-  const product = adminProduct(req, res);
-  if (!product) return;
-  db.createSignup({ product_id: product.id, client_id: 'admin', ...signupData(req.body, product) });
-  res.redirect(`/admin/product/${product.id}?msg=${encodeURIComponent('Запись добавлена')}`);
-});
-
-app.post('/admin/photo/:id/main', (req, res) => {
-  const ph = db.getPhoto(Number(req.params.id));
-  if (!ph) return notFound(res);
-  db.makePhotoMain(ph.id);
-  res.redirect(`/admin/product/${ph.product_id}`);
-});
-
-app.post('/admin/photo/:id/delete', (req, res) => {
-  const ph = db.getPhoto(Number(req.params.id));
-  if (!ph) return notFound(res);
-  db.deletePhoto(ph.id);
-  removeFiles([ph]);
-  res.redirect(`/admin/product/${ph.product_id}?msg=${encodeURIComponent('Фото удалено')}`);
-});
-
-// ----- Записи -----
 
 function signupData(body, product) {
   const choice = {};
@@ -500,35 +618,121 @@ function signupData(body, product) {
   };
 }
 
+app.post('/admin/product/:id/signup', (req, res) => {
+  const product = adminProduct(req, res);
+  if (!product) return;
+  db.createSignup({ product_id: product.id, client_id: 'admin', ...signupData(req.body, product) });
+  res.redirect(withMsg(`/admin/product/${product.id}`, 'Запись добавлена'));
+});
+
+app.post('/admin/photo/:id/main', (req, res) => {
+  const ph = db.getPhoto(Number(req.params.id));
+  if (!ph) return adminNotFound(req, res, 'Фото не найдено.');
+  db.makePhotoMain(ph.id);
+  res.redirect(`/admin/product/${ph.product_id}`);
+});
+
+app.post('/admin/photo/:id/delete', (req, res) => {
+  const ph = db.getPhoto(Number(req.params.id));
+  if (!ph) return adminNotFound(req, res, 'Фото не найдено.');
+  db.deletePhoto(ph.id);
+  removeFiles([ph]);
+  res.redirect(withMsg(`/admin/product/${ph.product_id}`, 'Фото удалено'));
+});
+
+// ---------- Записи ----------
+
+app.get('/admin/signups', (req, res) => {
+  const status = str(req.query.status);
+  const q = str(req.query.q, 100);
+  const purchaseId = Number(req.query.purchase) || null;
+  const scope = db.searchSignups({ purchaseId });
+  const statusCounts = { '': scope.length };
+  for (const s of scope) statusCounts[s.status] = (statusCounts[s.status] || 0) + 1;
+  page(res, admin.allSignupsPage({
+    nav: req.nav,
+    signups: db.searchSignups({ purchaseId, status, q, limit: 500 }),
+    status, q, purchaseId, statusCounts,
+    purchases: db.listPurchases(),
+    msg: str(req.query.msg, 200),
+  }));
+});
+
 app.get('/admin/signup/:id', (req, res) => {
   const signup = db.getSignup(Number(req.params.id));
-  if (!signup) return notFound(res, 'Запись не найдена.');
-  page(res, views.signupAdminPage({ signup, product: db.getProduct(signup.product_id) }));
+  if (!signup) return adminNotFound(req, res, 'Запись не найдена.');
+  const product = db.getProduct(signup.product_id);
+  page(res, admin.signupPage({ nav: req.nav, signup, product, purchase: db.getPurchase(product.purchase_id) }));
 });
 
 app.post('/admin/signup/:id', (req, res) => {
   const signup = db.getSignup(Number(req.params.id));
-  if (!signup) return notFound(res, 'Запись не найдена.');
+  if (!signup) return adminNotFound(req, res, 'Запись не найдена.');
   const product = db.getProduct(signup.product_id);
+  const status = str(req.body.status);
   db.updateSignup(signup.id, {
     ...signupData(req.body, product),
-    status: req.body.status in db.SIGNUP_STATUSES ? req.body.status : signup.status,
+    status: status in db.SIGNUP_STATUSES ? status : signup.status,
     note: str(req.body.note),
   });
-  res.redirect(`/admin/product/${product.id}?msg=${encodeURIComponent('Запись сохранена')}`);
+  res.redirect(withMsg(`/admin/product/${product.id}`, 'Запись сохранена'));
+});
+
+app.post('/admin/api/signup/:id/status', (req, res) => {
+  const signup = db.getSignup(Number(req.params.id));
+  const status = str(req.body.status);
+  if (!signup || !(status in db.SIGNUP_STATUSES)) return res.status(400).json({ error: 'Неверный статус' });
+  db.setSignupStatus([signup.id], status);
+  res.json({ ok: true, message: `Статус: ${db.SIGNUP_STATUSES[status]}` });
 });
 
 app.post('/admin/signups/bulk', (req, res) => {
   const selected = ids(req.body.ids);
   const back = safeBack(req.body.back, '/admin');
-  const sep = back.includes('?') ? '&' : '?';
-  if (!selected.length) return res.redirect(`${back}${sep}msg=${encodeURIComponent('Не выбрано ни одной записи')}`);
-  if (req.body.action === 'delete') {
+  if (!selected.length) return res.redirect(withMsg(back, 'Не выбрано ни одной записи'));
+  if (str(req.body.action) === 'delete') {
     db.deleteSignups(selected);
-    return res.redirect(`${back}${sep}msg=${encodeURIComponent(`Удалено записей: ${selected.length}`)}`);
+    return res.redirect(withMsg(back, `Удалено записей: ${selected.length}`));
   }
-  if (req.body.status in db.SIGNUP_STATUSES) db.setSignupStatus(selected, req.body.status);
-  res.redirect(`${back}${sep}msg=${encodeURIComponent(`Статус изменён: ${selected.length}`)}`);
+  const status = str(req.body.status);
+  if (status in db.SIGNUP_STATUSES) db.setSignupStatus(selected, status);
+  res.redirect(withMsg(back, `Статус изменён: ${selected.length}`));
+});
+
+// ---------- Клиенты ----------
+
+app.get('/admin/clients', (req, res) => {
+  const q = str(req.query.q, 100).toLowerCase();
+  let clients = aggregateClients(db.searchSignups({ limit: 100000 }));
+  if (q) clients = clients.filter((c) => c.name.toLowerCase().includes(q) || c.contact.toLowerCase().includes(q));
+  page(res, admin.clientsPage({ nav: req.nav, clients, q }));
+});
+
+app.get('/admin/clients/view', (req, res) => {
+  const key = str(req.query.c, 100);
+  const all = db.searchSignups({ limit: 100000 });
+  const signups = all.filter((s) => (contactKey(s.contact) || `name:${s.name.toLowerCase()}`) === key);
+  const [client] = aggregateClients(signups);
+  if (!signups.length) return adminNotFound(req, res, 'Клиент не найден.');
+  page(res, admin.clientPage({ nav: req.nav, client: client ?? { key, name: signups[0].name, contact: signups[0].contact, items: 0, sum: 0, paid: 0 }, signups }));
+});
+
+// ---------- Настройки ----------
+
+app.get('/admin/settings', (req, res) => page(res, admin.settingsPage({ nav: req.nav, s: settings(), msg: str(req.query.msg, 200) })));
+
+app.post('/admin/settings', async (req, res) => {
+  const values = {};
+  for (const k of SETTING_KEYS) values[k] = str(req.body[k], 2000);
+  values.site_name ||= 'Совместные закупки';
+  values.currency ||= '₽';
+  updateSettings(values);
+  let msg = 'Настройки сохранены';
+  if (req.body.test) {
+    msg = await notifyTelegram('✅ Уведомления о записях работают') ? 'Сохранено, тестовое сообщение отправлено в Telegram'
+      : 'Сохранено, но сообщение в Telegram не ушло — проверьте токен, chat id и что вы написали боту /start';
+  }
+  res.redirect(withMsg('/admin/settings', msg));
 });
 
 // ---------- Ошибки ----------
@@ -538,12 +742,13 @@ app.use((req, res) => notFound(res));
 app.use((err, req, res, next) => {
   console.error(err);
   const msg = err instanceof multer.MulterError
-    ? (err.code === 'LIMIT_FILE_SIZE' ? 'Файл больше 25 МБ.' : 'Слишком много файлов за раз (максимум 300).')
+    ? (err.code === 'LIMIT_FILE_SIZE' ? 'Файл больше 25 МБ.' : 'Слишком много файлов за раз.')
     : 'Что-то пошло не так. Попробуйте ещё раз.';
-  res.status(500).send(String(views.errorPage(500, msg)));
+  if (req.path.includes('/api/') || req.path.endsWith('/upload')) return res.status(500).json({ error: msg });
+  res.status(500).send(String(site.errorPage(500, msg)));
 });
 
 app.listen(PORT, () => {
-  console.log(`Сайт закупок: http://localhost:${PORT}  (админка: /admin)`);
+  console.log(`Сайт закупок: http://localhost:${PORT}  (админка: http://localhost:${PORT}/admin)`);
   if (!ADMIN_PASSWORD) console.warn('⚠️  ADMIN_PASSWORD не задан — вход в админку невозможен. Укажите его в .env');
 });

@@ -59,13 +59,28 @@ CREATE TABLE IF NOT EXISTS signups (
 );
 CREATE INDEX IF NOT EXISTS signups_product ON signups(product_id, created_at);
 CREATE INDEX IF NOT EXISTS signups_client ON signups(client_id);
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `);
 
+// Миграции для баз, созданных ранними версиями
+const purchaseCols = db.prepare('PRAGMA table_info(purchases)').all().map((c) => c.name);
+if (!purchaseCols.includes('pay_info')) db.exec("ALTER TABLE purchases ADD COLUMN pay_info TEXT NOT NULL DEFAULT ''");
+
 export const PURCHASE_STATUSES = {
-  draft: 'Черновик (не видна клиентам)',
-  open: 'Открыта — идёт запись',
-  stop: 'Стоп — запись закрыта',
-  archive: 'Архив (скрыта)',
+  draft: 'Черновик',
+  open: 'Идёт запись',
+  stop: 'Стоп',
+  archive: 'Архив',
+};
+
+export const PURCHASE_STATUS_HINTS = {
+  draft: 'видите только вы',
+  open: 'клиенты записываются',
+  stop: 'видна, запись закрыта',
+  archive: 'скрыта с сайта',
 };
 
 export const SIGNUP_STATUSES = {
@@ -109,6 +124,10 @@ export function listPurchases({ publicOnly = false } = {}) {
       (SELECT COUNT(*) FROM products pr WHERE pr.purchase_id = p.id AND pr.hidden = 0) AS products_count,
       (SELECT COUNT(*) FROM signups s JOIN products pr ON pr.id = s.product_id
         WHERE pr.purchase_id = p.id AND s.status != 'cancelled') AS signups_count,
+      (SELECT COUNT(*) FROM signups s JOIN products pr ON pr.id = s.product_id
+        WHERE pr.purchase_id = p.id AND s.status = 'new') AS new_count,
+      (SELECT COALESCE(SUM(s.qty * pr.price), 0) FROM signups s JOIN products pr ON pr.id = s.product_id
+        WHERE pr.purchase_id = p.id AND s.status != 'cancelled') AS factory_sum,
       (SELECT ph.thumb FROM photos ph JOIN products pr ON pr.id = ph.product_id
         WHERE pr.purchase_id = p.id AND pr.hidden = 0 ORDER BY pr.sort, pr.id, ph.sort, ph.id LIMIT 1) AS cover
     FROM purchases p ${where}
@@ -121,14 +140,19 @@ export function getPurchase(id) {
 }
 
 export function createPurchase(data) {
-  const r = db.prepare(`INSERT INTO purchases (title, description, status, deadline, org_fee, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)`).run(data.title, data.description, data.status, data.deadline, data.org_fee, now());
+  const r = db.prepare(`INSERT INTO purchases (title, description, status, deadline, org_fee, pay_info, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(data.title, data.description, data.status, data.deadline, data.org_fee,
+    data.pay_info ?? '', now());
   return Number(r.lastInsertRowid);
 }
 
 export function updatePurchase(id, data) {
-  db.prepare(`UPDATE purchases SET title = ?, description = ?, status = ?, deadline = ?, org_fee = ? WHERE id = ?`)
-    .run(data.title, data.description, data.status, data.deadline, data.org_fee, id);
+  db.prepare(`UPDATE purchases SET title = ?, description = ?, status = ?, deadline = ?, org_fee = ?, pay_info = ?
+    WHERE id = ?`).run(data.title, data.description, data.status, data.deadline, data.org_fee, data.pay_info, id);
+}
+
+export function setPurchaseStatus(id, status) {
+  db.prepare('UPDATE purchases SET status = ? WHERE id = ?').run(status, id);
 }
 
 export function deletePurchase(id) {
@@ -230,6 +254,13 @@ export function moveProduct(id, dir) {
   });
 }
 
+// Порядок товаров после перетаскивания в админке
+export function reorderProducts(purchaseId, ids) {
+  transaction(() => {
+    ids.forEach((id, i) => db.prepare('UPDATE products SET sort = ? WHERE id = ? AND purchase_id = ?').run(i + 1, id, purchaseId));
+  });
+}
+
 export function deleteProducts(ids) {
   const files = [];
   transaction(() => {
@@ -298,6 +329,10 @@ export function getSignup(id) {
   return parseSignup(db.prepare('SELECT * FROM signups WHERE id = ?').get(id));
 }
 
+export function setSignupNote(id, note) {
+  db.prepare('UPDATE signups SET note = ? WHERE id = ?').run(note, id);
+}
+
 export function updateSignup(id, data) {
   db.prepare(`UPDATE signups SET name = ?, contact = ?, choice = ?, qty = ?, comment = ?, status = ?, note = ? WHERE id = ?`)
     .run(data.name, data.contact, JSON.stringify(data.choice), data.qty, data.comment, data.status, data.note, id);
@@ -321,12 +356,59 @@ export function listPurchaseSignups(purchaseId) {
     WHERE pr.purchase_id = ? ORDER BY s.created_at, s.id`).all(purchaseId).map(parseSignup);
 }
 
-export function listClientSignups(clientId) {
-  return db.prepare(`SELECT s.*, pr.title AS product_title, pr.article, pr.price, pr.purchase_id,
-      pu.title AS purchase_title, pu.org_fee, pu.status AS purchase_status,
+const SIGNUP_JOIN = `SELECT s.*, pr.title AS product_title, pr.article, pr.price, pr.purchase_id,
+      pu.title AS purchase_title, pu.org_fee, pu.status AS purchase_status, pu.pay_info,
       (SELECT thumb FROM photos WHERE product_id = pr.id ORDER BY sort, id LIMIT 1) AS thumb
-    FROM signups s JOIN products pr ON pr.id = s.product_id JOIN purchases pu ON pu.id = pr.purchase_id
-    WHERE s.client_id = ? ORDER BY s.created_at DESC`).all(clientId).map(parseSignup);
+    FROM signups s JOIN products pr ON pr.id = s.product_id JOIN purchases pu ON pu.id = pr.purchase_id`;
+
+// Записи с фильтрами: по закупке, статусу, поиску по имени/контакту/товару, по контакту клиента
+export function searchSignups({ purchaseId, status, q, contact, limit = 1000 } = {}) {
+  const where = [];
+  const args = [];
+  if (purchaseId) { where.push('pr.purchase_id = ?'); args.push(purchaseId); }
+  if (status) { where.push('s.status = ?'); args.push(status); }
+  if (contact) { where.push('lower(trim(s.contact)) = ?'); args.push(contact); }
+  if (q) {
+    where.push(`(lower(s.name) LIKE ? OR lower(s.contact) LIKE ? OR lower(pr.title) LIKE ? OR lower(pr.article) LIKE ?)`);
+    const like = `%${q.toLowerCase()}%`;
+    args.push(like, like, like, like);
+  }
+  return db.prepare(`${SIGNUP_JOIN} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY s.created_at DESC, s.id DESC LIMIT ${Number(limit)}`).all(...args).map(parseSignup);
+}
+
+export function dashboardStats() {
+  const one = (sql, ...a) => db.prepare(sql).get(...a);
+  const dayAgo = now() - 86400_000;
+  const weekAgo = now() - 7 * 86400_000;
+  return {
+    open: one("SELECT COUNT(*) AS c FROM purchases WHERE status = 'open'").c,
+    purchases: one("SELECT COUNT(*) AS c FROM purchases WHERE status != 'archive'").c,
+    newSignups: one("SELECT COUNT(*) AS c FROM signups WHERE status = 'new'").c,
+    today: one("SELECT COUNT(*) AS c FROM signups WHERE status != 'cancelled' AND created_at > ?", dayAgo).c,
+    week: one("SELECT COUNT(*) AS c FROM signups WHERE status != 'cancelled' AND created_at > ?", weekAgo).c,
+    clients: one("SELECT COUNT(DISTINCT lower(trim(contact))) AS c FROM signups WHERE status != 'cancelled'").c,
+  };
+}
+
+// ---------- Настройки сайта ----------
+
+export function getSettings(defaults) {
+  const out = { ...defaults };
+  for (const r of db.prepare('SELECT key, value FROM settings').all()) out[r.key] = r.value;
+  return out;
+}
+
+export function saveSettings(values) {
+  transaction(() => {
+    for (const [k, v] of Object.entries(values)) {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(k, v);
+    }
+  });
+}
+
+export function listClientSignups(clientId) {
+  return db.prepare(`${SIGNUP_JOIN} WHERE s.client_id = ? ORDER BY s.created_at DESC`).all(clientId).map(parseSignup);
 }
 
 export default db;
